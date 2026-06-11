@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "WordNet Pro module"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "WordNet Pro"
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
+      "value": "WordNet Pro"
     }
   ]
 }
