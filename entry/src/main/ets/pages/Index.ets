@@ -1,79 +1,74 @@
-import { JsonDialogMode, Layer, SaveStatus, SearchResult, WordNetSettings, WordNode, Workspace } from '../models/GraphModels'
-import { AUTO_SAVE_DELAY_MS, COLORS, LARGE_CONNECTION_CONFIRM_THRESHOLD } from '../constants/AppConstants'
-import { createDefaultWorkspace } from '../services/WorkspaceFactory'
-import { GraphService } from '../services/GraphService'
-import { StorageService } from '../services/StorageService'
-import { ImportExportService } from '../services/ImportExportService'
+import { WorkspaceData, WordLayer, WordNode, WordEdge, CameraState, SaveStatus, JsonDialogMode } from '../models/GraphModels'
+import { createDefaultWorkspace, normalizeWorkspace } from '../services/WorkspaceFactory'
+import { WorkspaceStorage } from '../services/WorkspaceStorage'
 import { showToast } from '../utils/ToastUtil'
-import { ensureWorkspace } from '../services/WorkspaceFactory'
-import { TopBar } from '../components/TopBar'
+import { AUTO_SAVE_DELAY_MS, COLORS } from '../constants/AppConstants'
+import { HeaderBar } from '../components/HeaderBar'
 import { GraphCanvas } from '../components/GraphCanvas'
-import { LayerPanel } from '../components/LayerPanel'
-import { AddNodePanel } from '../components/AddNodePanel'
-import { SearchPanel } from '../components/SearchPanel'
-import { QuickConnectPanel } from '../components/QuickConnectPanel'
-import { NodeNotePanel } from '../components/NodeNotePanel'
-import { SelectionBar } from '../components/SelectionBar'
-import { SettingsPanel } from '../components/SettingsPanel'
+import { ZoomControls } from '../components/ZoomControls'
+import { ControlPanel } from '../components/ControlPanel'
+import { ContextMenu } from '../components/ContextMenu'
 import { JsonDialog } from '../components/JsonDialog'
-import { promptAction } from '@kit.ArkUI'
+import { RenameNodeDialog } from '../components/RenameNodeDialog'
+import { RenameLayerDialog } from '../components/RenameLayerDialog'
+import { CreateLayerDialog } from '../components/CreateLayerDialog'
 import { common } from '@kit.AbilityKit'
 
 @Entry
 @Component
 struct Index {
-  @State workspace: Workspace = createDefaultWorkspace()
-  @State activeLayerId: string = ''
-  @State selectedNodeIds: string[] = []
-  @State connectingFromNodeId: string = ''
-  @State searchKeyword: string = ''
-  @State searchResultNodeIds: string[] = []
-  @State highlightedNodeId: string = ''
+  @State workspace: WorkspaceData = createDefaultWorkspace()
   @State saveStatus: SaveStatus = 'saved'
-  @State isSettingsVisible: boolean = false
+  @State isPanelOpen: boolean = false
   @State isJsonDialogVisible: boolean = false
   @State jsonDialogMode: JsonDialogMode = 'export'
-  @State jsonDialogText: string = ''
-  @State isSelectionMode: boolean = false
-  @State screenWidth: number = 840
-  @State sidePanelTab: number = 0
+  @State jsonText: string = ''
+  @State contextMenuVisible: boolean = false
+  @State contextMenuX: number = 0
+  @State contextMenuY: number = 0
+  @State selectedNodeId: number = -1
+  @State canvasWidth: number = 0
+  @State canvasHeight: number = 0
+  @State contextMenuNodeId: number = -1
+  @State boxSelectMode: boolean = false
+  @State selectedNodeIds: number[] = []
+  @State shouldStartConnect: boolean = false
+  @State alphabetSorted: boolean = false
+  private nodePositionsBeforeSort: Map<number, number[]> = new Map()
 
   private autoSaveTimer: number = -1
-  private highlightTimer: number = -1
-  private canvasWidth: number = 0
-  private canvasHeight: number = 0
+
+  private renameNodeDialog: CustomDialogController = new CustomDialogController({
+    builder: RenameNodeDialog({ currentName: '', onConfirm: () => {} }),
+    autoCancel: true
+  })
+  private renameLayerDialog: CustomDialogController = new CustomDialogController({
+    builder: RenameLayerDialog({ currentName: '', onConfirm: () => {} }),
+    autoCancel: true
+  })
+  private createLayerDialog: CustomDialogController = new CustomDialogController({
+    builder: CreateLayerDialog({ onConfirm: () => {} }),
+    autoCancel: true
+  })
 
   async aboutToAppear(): Promise<void> {
-    await this.initWorkspace()
+    await this.loadWorkspace()
   }
 
   aboutToDisappear(): void {
     if (this.autoSaveTimer >= 0) {
       clearTimeout(this.autoSaveTimer)
     }
-    if (this.highlightTimer >= 0) {
-      clearTimeout(this.highlightTimer)
-    }
   }
 
-  private async initWorkspace(): Promise<void> {
+  private async loadWorkspace(): Promise<void> {
     try {
       const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext
-      const saved: Workspace | undefined = await StorageService.loadWorkspace(context)
-      if (saved) {
-        const ensured: Workspace = ensureWorkspace(saved)
-        this.workspace = ensured
-        this.activeLayerId = ensured.activeLayerId
-      } else {
-        const defaultWs: Workspace = createDefaultWorkspace()
-        this.workspace = defaultWs
-        this.activeLayerId = defaultWs.activeLayerId
-      }
+      const loaded: WorkspaceData = await WorkspaceStorage.loadWorkspace(context)
+      this.workspace = loaded
     } catch (err) {
-      console.error('[Index] initWorkspace failed')
-      const defaultWs: Workspace = createDefaultWorkspace()
-      this.workspace = defaultWs
-      this.activeLayerId = defaultWs.activeLayerId
+      console.error('[Index] loadWorkspace failed')
+      this.workspace = createDefaultWorkspace()
     }
   }
 
@@ -81,21 +76,18 @@ struct Index {
     this.saveStatus = 'saving'
     try {
       const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext
-      await StorageService.saveWorkspace(context, this.workspace)
+      await WorkspaceStorage.saveWorkspace(context, this.workspace)
       this.saveStatus = 'saved'
       if (showToastFlag) {
         showToast('保存成功')
       }
     } catch (err) {
       this.saveStatus = 'failed'
-      showToast('保存失败，请导出 JSON 备份')
+      showToast('保存失败')
     }
   }
 
   private scheduleAutoSave(): void {
-    if (!this.workspace.settings.autoSave) {
-      return
-    }
     if (this.autoSaveTimer >= 0) {
       clearTimeout(this.autoSaveTimer)
     }
@@ -105,656 +97,686 @@ struct Index {
     }, AUTO_SAVE_DELAY_MS) as number
   }
 
-  private setWorkspace(next: Workspace): void {
+  private toggleBoxSelectMode(): void {
+    this.boxSelectMode = !this.boxSelectMode
+
+    if (!this.boxSelectMode) {
+      this.selectedNodeIds = []
+    }
+
+    showToast(this.boxSelectMode ? '框选模式已开启' : '框选模式已关闭')
+  }
+
+  private toggleAlphabetSort(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+
+    let newNodes: WordNode[] = []
+
+    if (!this.alphabetSorted) {
+      this.nodePositionsBeforeSort = new Map()
+      for (const n of layer.nodes) {
+        this.nodePositionsBeforeSort.set(n.id, [n.x, n.y])
+      }
+      newNodes = [...layer.nodes].sort((a: WordNode, b: WordNode) => a.word.localeCompare(b.word))
+      this.alphabetSorted = true
+      showToast('已按字母排序')
+    } else {
+      newNodes = []
+      for (const n of layer.nodes) {
+        const pos: number[] | undefined = this.nodePositionsBeforeSort.get(n.id)
+        if (pos) {
+          newNodes.push({ id: n.id, word: n.word, x: pos[0], y: pos[1], note: n.note })
+        } else {
+          newNodes.push(n)
+        }
+      }
+      this.nodePositionsBeforeSort = new Map()
+      this.alphabetSorted = false
+      showToast('已恢复原始顺序')
+    }
+
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === layer.id) {
+        updatedLayers.push({
+          id: l.id, name: l.name, nodes: newNodes, edges: l.edges,
+          nextId: l.nextId, camera: l.camera, createdAt: l.createdAt, updatedAt: Date.now()
+        })
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
+  }
+
+  private openSelectedNodeMenu(): void {
+    if (this.selectedNodeId < 0) {
+      showToast('请先选择一个节点')
+      return
+    }
+    const safeX: number = this.canvasWidth > 0 ? this.canvasWidth - 180 : 220
+    const safeY: number = this.canvasHeight > 0 ? 120 : 120
+    this.contextMenuNodeId = this.selectedNodeId
+    this.contextMenuX = safeX
+    this.contextMenuY = safeY
+    this.contextMenuVisible = true
+  }
+
+  private openNodeMenuAt(nodeId: number, x: number, y: number): void {
+    const menuWidth: number = 160
+    const menuHeight: number = 150
+    const vpW: number = this.canvasWidth > 0 ? this.canvasWidth : 360
+    const vpH: number = this.canvasHeight > 0 ? this.canvasHeight : 720
+
+    let safeX: number = x
+    let safeY: number = y
+    if (safeX < 8) { safeX = 8 }
+    if (safeY < 8) { safeY = 8 }
+    if (safeX + menuWidth > vpW - 8) { safeX = vpW - menuWidth - 8 }
+    if (safeY + menuHeight > vpH - 8) { safeY = vpH - menuHeight - 8 }
+
+    this.selectedNodeId = nodeId
+    this.contextMenuNodeId = nodeId
+    this.contextMenuX = safeX
+    this.contextMenuY = safeY
+    this.contextMenuVisible = true
+  }
+
+  private moveSelectedNodes(nodeIds: number[], dx: number, dy: number): void {
+    if (nodeIds.length === 0) {
+      return
+    }
+
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+
+    const updatedNodes: WordNode[] = []
+    for (const node of layer.nodes) {
+      if (nodeIds.includes(node.id)) {
+        updatedNodes.push({
+          id: node.id, word: node.word,
+          x: node.x + dx, y: node.y + dy, note: node.note
+        })
+      } else {
+        updatedNodes.push(node)
+      }
+    }
+
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === layer.id) {
+        updatedLayers.push({
+          id: l.id, name: l.name, nodes: updatedNodes, edges: l.edges,
+          nextId: l.nextId, camera: l.camera, createdAt: l.createdAt, updatedAt: Date.now()
+        })
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
+  }
+
+  private onWorkspaceChange(next: WorkspaceData): void {
     this.workspace = next
-    this.activeLayerId = next.activeLayerId
     this.scheduleAutoSave()
   }
 
-  private getActiveLayer(): Layer | undefined {
-    return GraphService.getActiveLayer(this.workspace)
-  }
-
-  private onAddNode(label: string): void {
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (!layer) {
-      return
-    }
-
-    const centerX: number = (this.canvasWidth / 2 - layer.viewport.x) / layer.viewport.zoom
-    const centerY: number = (this.canvasHeight / 2 - layer.viewport.y) / layer.viewport.zoom
-    const offset: number = (layer.nodes.length % 5) * 28
-
-    const before: number = layer.nodes.length
-    const next: Workspace = GraphService.addNode(this.workspace, label, centerX + offset, centerY + offset)
-    if (next === this.workspace) {
-      showToast('该单词已存在')
-      return
-    }
-
-    const updatedLayer: Layer | undefined = GraphService.getActiveLayer(next)
-    if (updatedLayer && updatedLayer.nodes.length > before) {
-      const newNode: WordNode = updatedLayer.nodes[updatedLayer.nodes.length - 1]
-      this.selectedNodeIds = [newNode.id]
-    }
-
-    this.setWorkspace(next)
-  }
-
-  private onRenameNode(nodeId: string, newLabel: string): void {
-    const next: Workspace = GraphService.renameNode(this.workspace, nodeId, newLabel)
-    if (next === this.workspace) {
-      showToast('节点名称不能为空或已存在')
-      return
-    }
-    this.setWorkspace(next)
-  }
-
-  private onDeleteSelected(): void {
-    if (this.selectedNodeIds.length === 0) {
-      return
-    }
-
-    if (this.workspace.settings.confirmBeforeDelete) {
-      const count: number = this.selectedNodeIds.length
-      promptAction.showDialog({
-        title: '确认删除',
-        message: '确定删除选中的 ' + count + ' 个节点吗？这些节点相关的连接也会被删除。',
-        buttons: [
-          { text: '取消', color: COLORS.textSecondary },
-          { text: '删除', color: COLORS.danger }
-        ]
-      }).then((result: promptAction.ShowDialogSuccessResponse) => {
-        if (result.index === 1) {
-          this.doDeleteSelected()
-        }
-      })
-    } else {
-      this.doDeleteSelected()
-    }
-  }
-
-  private doDeleteSelected(): void {
-    const next: Workspace = GraphService.deleteNodes(this.workspace, this.selectedNodeIds)
-    this.selectedNodeIds = []
-    this.setWorkspace(next)
-    showToast('删除成功')
-  }
-
-  private onNodePositionChange(nodeId: string, x: number, y: number): void {
-    const next: Workspace = GraphService.updateNodePosition(this.workspace, nodeId, x, y)
-    this.setWorkspace(next)
-  }
-
-  private onMoveSelectedNodes(deltaX: number, deltaY: number): void {
-    const next: Workspace = GraphService.moveNodes(this.workspace, this.selectedNodeIds, deltaX, deltaY)
-    this.setWorkspace(next)
-  }
-
-  private onSelectSingle(nodeId: string): void {
-    this.selectedNodeIds = [nodeId]
-    this.isSelectionMode = false
-  }
-
-  private onSelectMultiple(nodeIds: string[]): void {
-    this.selectedNodeIds = nodeIds
-    this.isSelectionMode = nodeIds.length > 1
-  }
-
-  private onClearSelection(): void {
-    this.selectedNodeIds = []
-    this.isSelectionMode = false
-    this.connectingFromNodeId = ''
-  }
-
-  private onStartConnect(nodeId: string): void {
-    this.connectingFromNodeId = nodeId
-    showToast('点击目标节点完成连接')
-  }
-
-  private onCompleteConnect(targetNodeId: string): void {
-    if (this.connectingFromNodeId.length === 0) {
-      return
-    }
-    const next: Workspace = GraphService.connectNodes(this.workspace, this.connectingFromNodeId, targetNodeId)
-    if (next === this.workspace) {
-      showToast('连接已存在')
-    } else {
-      showToast('连接成功')
-    }
-    this.connectingFromNodeId = ''
-    this.setWorkspace(next)
-  }
-
-  private onConnectNodes(sourceId: string, targetId: string): void {
-    const next: Workspace = GraphService.connectNodes(this.workspace, sourceId, targetId)
-    if (next === this.workspace) {
-      showToast('连接已存在或无效')
-    } else {
-      showToast('连接成功')
-      this.setWorkspace(next)
-    }
-  }
-
-  private onDisconnectNodes(sourceId: string, targetId: string): void {
-    const next: Workspace = GraphService.disconnectNodes(this.workspace, sourceId, targetId)
-    if (next === this.workspace) {
-      showToast('连接不存在')
-    } else {
-      showToast('断开成功')
-      this.setWorkspace(next)
-    }
-  }
-
-  private onConnectSelectedAll(): void {
-    if (this.selectedNodeIds.length < 2) {
-      showToast('至少选择两个节点')
-      return
-    }
-
-    const count: number = this.selectedNodeIds.length
-    const newConnectionCount: number = count * (count - 1) / 2
-
-    if (newConnectionCount > LARGE_CONNECTION_CONFIRM_THRESHOLD) {
-      promptAction.showDialog({
-        title: '确认连接',
-        message: '即将创建 ' + newConnectionCount + ' 条连接，是否继续？',
-        buttons: [
-          { text: '取消', color: COLORS.textSecondary },
-          { text: '确认', color: COLORS.primary }
-        ]
-      }).then((result: promptAction.ShowDialogSuccessResponse) => {
-        if (result.index === 1) {
-          this.doConnectSelectedAll()
-        }
-      })
-    } else {
-      this.doConnectSelectedAll()
-    }
-  }
-
-  private doConnectSelectedAll(): void {
-    const next: Workspace = GraphService.connectAllSelected(this.workspace, this.selectedNodeIds)
-    if (next === this.workspace) {
-      showToast('所有连接已存在')
-    } else {
-      showToast('连接成功')
-      this.setWorkspace(next)
-    }
-  }
-
-  private onDisconnectSelected(): void {
-    if (this.selectedNodeIds.length < 2) {
-      showToast('至少选择两个节点')
-      return
-    }
-    const next: Workspace = GraphService.disconnectSelected(this.workspace, this.selectedNodeIds)
-    if (next === this.workspace) {
-      showToast('无连接可断开')
-    } else {
-      showToast('断开成功')
-      this.setWorkspace(next)
-    }
-  }
-
-  private onUpdateNodeNote(nodeId: string, note: string): void {
-    const next: Workspace = GraphService.updateNodeNote(this.workspace, nodeId, note)
-    this.setWorkspace(next)
-  }
-
-  private onSearch(keyword: string): SearchResult[] {
-    return GraphService.searchCurrentLayer(this.workspace, keyword)
-  }
-
-  private onLocateNode(nodeId: string): void {
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (!layer) {
-      return
-    }
-
-    let node: WordNode | undefined = undefined
-    for (const n of layer.nodes) {
-      if (n.id === nodeId) {
-        node = n
-        break
+  private getCurrentCamera(): CameraState {
+    for (const l of this.workspace.layers) {
+      if (l.id === this.workspace.currentLayerId) {
+        return l.camera
       }
     }
-    if (!node) {
-      return
-    }
-
-    const newX: number = this.canvasWidth / 2 - node.x * layer.viewport.zoom
-    const newY: number = this.canvasHeight / 2 - node.y * layer.viewport.zoom
-    const next: Workspace = GraphService.updateActiveViewport(this.workspace, newX, newY, layer.viewport.zoom)
-    this.setWorkspace(next)
-
-    this.highlightedNodeId = nodeId
-    if (this.highlightTimer >= 0) {
-      clearTimeout(this.highlightTimer)
-    }
-    this.highlightTimer = setTimeout(() => {
-      this.highlightedNodeId = ''
-      this.highlightTimer = -1
-    }, 1500) as number
-
-    this.selectedNodeIds = [nodeId]
+    const defaultCamera: CameraState = { x: 0, y: 0, scale: 1 }
+    return defaultCamera
   }
 
-  private onCreateLayer(): void {
-    const next: Workspace = GraphService.createLayer(this.workspace)
-    this.selectedNodeIds = []
-    this.setWorkspace(next)
+  private openExportDialog(): void {
+    this.jsonText = JSON.stringify(this.workspace, null, 2)
+    this.jsonDialogMode = 'export'
+    this.isJsonDialogVisible = true
   }
 
-  private onCopyLayer(): void {
-    const next: Workspace = GraphService.copyActiveLayer(this.workspace)
-    this.selectedNodeIds = []
-    this.setWorkspace(next)
-  }
-
-  private onRenameLayer(newName: string): void {
-    const next: Workspace = GraphService.renameActiveLayer(this.workspace, newName)
-    this.setWorkspace(next)
-  }
-
-  private onSwitchLayer(layerId: string): void {
-    const next: Workspace = GraphService.switchLayer(this.workspace, layerId)
-    this.selectedNodeIds = []
-    this.connectingFromNodeId = ''
-    this.setWorkspace(next)
-  }
-
-  private onClearAllData(): void {
-    const defaultWs: Workspace = createDefaultWorkspace()
-    this.workspace = defaultWs
-    this.activeLayerId = defaultWs.activeLayerId
-    this.selectedNodeIds = []
-    this.connectingFromNodeId = ''
-    this.isSettingsVisible = false
-    this.saveWorkspace(false)
-    showToast('清空成功')
-  }
-
-  private onOpenImportDialog(): void {
+  private openImportDialog(): void {
+    this.jsonText = ''
     this.jsonDialogMode = 'import'
-    this.jsonDialogText = ''
     this.isJsonDialogVisible = true
   }
 
   private onImportJson(jsonText: string): void {
     try {
-      const imported: Workspace = ImportExportService.importFromJson(jsonText)
-      this.workspace = imported
-      this.activeLayerId = imported.activeLayerId
-      this.selectedNodeIds = []
-      this.connectingFromNodeId = ''
+      const parsed: WorkspaceData = JSON.parse(jsonText) as WorkspaceData
+      const normalized: WorkspaceData = normalizeWorkspace(parsed)
+      this.workspace = normalized
       this.isJsonDialogVisible = false
       this.saveWorkspace(false)
       showToast('导入成功')
     } catch (err) {
-      showToast('导入失败')
+      showToast('JSON 格式错误')
     }
   }
 
-  private onOpenExportDialog(): void {
-    this.jsonDialogMode = 'export'
-    this.jsonDialogText = ImportExportService.exportToJson(this.workspace)
-    this.isJsonDialogVisible = true
+  private onLongPressNode(nodeId: number, screenX: number, screenY: number): void {
+    this.openNodeMenuAt(nodeId, screenX, screenY)
   }
 
-  private onUpdateSettings(settings: WordNetSettings): void {
-    const next: Workspace = {
-      version: this.workspace.version,
-      appName: this.workspace.appName,
-      activeLayerId: this.workspace.activeLayerId,
-      layers: this.workspace.layers,
-      settings: settings,
-      createdAt: this.workspace.createdAt,
-      updatedAt: this.workspace.updatedAt
-    }
-    this.setWorkspace(next)
+  private closeContextMenu(): void {
+    this.contextMenuVisible = false
   }
 
-  private onDeleteSingleNode(nodeId: string): void {
-    this.selectedNodeIds = [nodeId]
-    this.onDeleteSelected()
-  }
-
-  private getSelectedNodeLabel(): string {
-    if (this.selectedNodeIds.length === 1) {
-      const layer: Layer | undefined = this.getActiveLayer()
-      if (layer) {
-        for (const n of layer.nodes) {
-          if (n.id === this.selectedNodeIds[0]) {
-            return n.label
-          }
-        }
-      }
-    }
-    return ''
-  }
-
-  private getSelectedNodeNote(): string {
-    if (this.selectedNodeIds.length === 1) {
-      const layer: Layer | undefined = this.getActiveLayer()
-      if (layer) {
-        for (const n of layer.nodes) {
-          if (n.id === this.selectedNodeIds[0]) {
-            return n.note
-          }
-        }
-      }
-    }
-    return ''
-  }
-
-  private isLargeScreen(): boolean {
-    return this.screenWidth >= 840
-  }
-
-  private getNodeLabels(): string[] {
-    const layer: Layer | undefined = this.getActiveLayer()
+  private renameSelectedNode(): void {
+    this.contextMenuVisible = false
+    const layer: WordLayer | undefined = this.getCurrentLayer()
     if (!layer) {
-      return []
+      return
     }
-    const labels: string[] = []
+    let currentNode: WordNode | undefined = undefined
     for (const n of layer.nodes) {
-      labels.push(n.label)
+      if (n.id === this.selectedNodeId) {
+        currentNode = n
+        break
+      }
     }
-    return labels
+    if (!currentNode) {
+      return
+    }
+    const currentName: string = currentNode.word
+    const nodeId: number = currentNode.id
+    this.renameNodeDialog = new CustomDialogController({
+      builder: RenameNodeDialog({
+        currentName: currentName,
+        onConfirm: (newName: string) => {
+          this.renameSelectedNodeTo(nodeId, newName)
+        }
+      }),
+      autoCancel: true
+    })
+    this.renameNodeDialog.open()
   }
 
-  private getNodeIds(): string[] {
-    const layer: Layer | undefined = this.getActiveLayer()
+  private renameSelectedNodeTo(nodeId: number, newName: string): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
     if (!layer) {
-      return []
+      return
     }
-    const ids: string[] = []
+    const trimmed: string = newName.trim()
+    if (trimmed.length === 0) {
+      showToast('名称不能为空')
+      return
+    }
     for (const n of layer.nodes) {
-      ids.push(n.id)
-    }
-    return ids
-  }
-
-  private getLayerNames(): string[] {
-    const names: string[] = []
-    for (const l of this.workspace.layers) {
-      names.push(l.name)
-    }
-    return names
-  }
-
-  private getLayerIds(): string[] {
-    const ids: string[] = []
-    for (const l of this.workspace.layers) {
-      ids.push(l.id)
-    }
-    return ids
-  }
-
-  @Builder
-  buildLargeScreenSidePanel() {
-    Column() {
-      Tabs({ barPosition: BarPosition.Start }) {
-        TabContent() {
-          LayerPanel({
-            layerNames: this.getLayerNames(),
-            layerIds: this.getLayerIds(),
-            activeLayerId: this.activeLayerId,
-            onCreateLayer: () => { this.onCreateLayer() },
-            onCopyLayer: () => { this.onCopyLayer() },
-            onRenameLayer: (name: string) => { this.onRenameLayer(name) },
-            onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
-          })
-        }
-        .tabBar('图层')
-
-        TabContent() {
-          AddNodePanel({
-            onAddNode: (label: string) => { this.onAddNode(label) }
-          })
-        }
-        .tabBar('添加')
-
-        TabContent() {
-          Column() {
-            SearchPanel({
-              onSearch: (keyword: string): SearchResult[] => { return this.onSearch(keyword) },
-              onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
-            })
-
-            Divider().margin({ top: 4, bottom: 4 })
-
-            QuickConnectPanel({
-              nodeLabels: this.getNodeLabels(),
-              nodeIds: this.getNodeIds(),
-              onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
-              onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
-            })
-          }
-        }
-        .tabBar('搜索')
-
-        TabContent() {
-          NodeNotePanel({
-            selectedNodeIds: this.selectedNodeIds,
-            selectedNodeLabel: this.getSelectedNodeLabel(),
-            nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
-            onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
-            onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
-            onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
-            onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
-          })
-        }
-        .tabBar('注释')
+      if (n.id !== nodeId && n.word === trimmed) {
+        showToast('节点名称已存在')
+        return
       }
-      .barHeight(40)
-      .scrollable(true)
-      .animationDuration(0)
     }
-    .width(340)
-    .height('100%')
-    .backgroundColor(COLORS.panelBg)
-    .border({ width: { left: 1 }, color: COLORS.panelBorder })
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        updatedNodes.push({ id: n.id, word: trimmed, x: n.x, y: n.y, note: n.note })
+      } else {
+        updatedNodes.push(n)
+      }
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: updatedNodes, edges: layer.edges,
+      nextId: layer.nextId, camera: layer.camera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    this.applyLayerUpdate(updatedLayer)
+    showToast('重命名成功')
   }
 
-  @Builder
-  buildMobileSidePanel() {
-    Column() {
-      Tabs({ barPosition: BarPosition.Start }) {
-        TabContent() {
-          LayerPanel({
-            layerNames: this.getLayerNames(),
-            layerIds: this.getLayerIds(),
-            activeLayerId: this.activeLayerId,
-            onCreateLayer: () => { this.onCreateLayer() },
-            onCopyLayer: () => { this.onCopyLayer() },
-            onRenameLayer: (name: string) => { this.onRenameLayer(name) },
-            onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
-          })
-        }
-        .tabBar('图层')
-
-        TabContent() {
-          AddNodePanel({
-            onAddNode: (label: string) => { this.onAddNode(label) }
-          })
-        }
-        .tabBar('添加')
-
-        TabContent() {
-          Column() {
-            SearchPanel({
-              onSearch: (keyword: string): SearchResult[] => { return this.onSearch(keyword) },
-              onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
-            })
-
-            Divider().margin({ top: 4, bottom: 4 })
-
-            QuickConnectPanel({
-              nodeLabels: this.getNodeLabels(),
-              nodeIds: this.getNodeIds(),
-              onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
-              onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
-            })
-          }
-        }
-        .tabBar('搜索')
-
-        TabContent() {
-          NodeNotePanel({
-            selectedNodeIds: this.selectedNodeIds,
-            selectedNodeLabel: this.getSelectedNodeLabel(),
-            nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
-            onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
-            onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
-            onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
-            onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
-          })
-        }
-        .tabBar('注释')
-      }
-      .barHeight(36)
-      .scrollable(true)
-      .animationDuration(0)
+  private openRenameLayerDialog(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
     }
-    .width('100%')
-    .height(240)
-    .backgroundColor(COLORS.panelBg)
-    .border({ width: { top: 1 }, color: COLORS.panelBorder })
+    const currentName: string = layer.name
+    const layerId: string = layer.id
+    this.renameLayerDialog = new CustomDialogController({
+      builder: RenameLayerDialog({
+        currentName: currentName,
+        onConfirm: (newName: string) => {
+          this.renameLayerTo(layerId, newName)
+        }
+      }),
+      autoCancel: true
+    })
+    this.renameLayerDialog.open()
+  }
+
+  private renameLayerTo(layerId: string, newName: string): void {
+    const trimmed: string = newName.trim()
+    if (trimmed.length === 0) {
+      showToast('图层名称不能为空')
+      return
+    }
+    for (const l of this.workspace.layers) {
+      if (l.id !== layerId && l.name === trimmed) {
+        showToast('图层名称已存在')
+        return
+      }
+    }
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === layerId) {
+        updatedLayers.push({
+          id: l.id, name: trimmed, nodes: l.nodes, edges: l.edges,
+          nextId: l.nextId, camera: l.camera, createdAt: l.createdAt, updatedAt: Date.now()
+        })
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
+    showToast('重命名成功')
+  }
+
+  private openCreateLayerDialog(): void {
+    this.createLayerDialog = new CustomDialogController({
+      builder: CreateLayerDialog({
+        onConfirm: (name: string) => {
+          this.handleCreateLayer(name)
+        }
+      }),
+      autoCancel: true
+    })
+    this.createLayerDialog.open()
+  }
+
+  private handleCreateLayer(name: string): void {
+    const now: number = Date.now()
+    const newCamera: CameraState = { x: 0, y: 0, scale: 1 }
+    const newLayer: WordLayer = {
+      id: 'layer_' + now.toString(),
+      name: name,
+      nodes: [],
+      edges: [],
+      nextId: 0,
+      camera: newCamera,
+      createdAt: now,
+      updatedAt: now
+    }
+    const updatedLayers: WordLayer[] = [...this.workspace.layers, newLayer]
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: newLayer.id, layers: updatedLayers, updatedAt: now
+    })
+    showToast('已创建图层：' + name)
+  }
+
+  private deleteLayer(layerId: string): void {
+    if (this.workspace.layers.length <= 1) {
+      showToast('至少保留一个图层')
+      return
+    }
+    const newLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id !== layerId) {
+        newLayers.push(l)
+      }
+    }
+    if (newLayers.length === this.workspace.layers.length) {
+      return
+    }
+    let newCurrentLayerId: string = this.workspace.currentLayerId
+    if (this.workspace.currentLayerId === layerId) {
+      newCurrentLayerId = newLayers[0].id
+    }
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: newCurrentLayerId, layers: newLayers, updatedAt: Date.now()
+    })
+    showToast('已删除图层')
+  }
+
+  private deleteSelectedNode(): void {
+    this.contextMenuVisible = false
+    if (this.selectedNodeId < 0) {
+      return
+    }
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+    const filteredNodes: WordNode[] = []
+    for (const n of layer.nodes) {
+      if (n.id !== this.selectedNodeId) {
+        filteredNodes.push(n)
+      }
+    }
+    const filteredEdges: WordEdge[] = []
+    for (const e of layer.edges) {
+      if (e.from !== this.selectedNodeId && e.to !== this.selectedNodeId) {
+        filteredEdges.push(e)
+      }
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: filteredNodes, edges: filteredEdges,
+      nextId: layer.nextId, camera: layer.camera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === updatedLayer.id) {
+        updatedLayers.push(updatedLayer)
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+    this.selectedNodeId = -1
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
+    showToast('已删除')
+  }
+
+  private startConnectFromSelected(): void {
+    this.contextMenuVisible = false
+    this.shouldStartConnect = true
+  }
+
+  private getCurrentLayer(): WordLayer | undefined {
+    for (const l of this.workspace.layers) {
+      if (l.id === this.workspace.currentLayerId) {
+        return l
+      }
+    }
+    return undefined
   }
 
   build() {
     Stack() {
       Column() {
-        TopBar({
+        HeaderBar({
           saveStatus: this.saveStatus,
-          onImport: () => { this.onOpenImportDialog() },
-          onSave: () => { this.saveWorkspace(true) },
-          onExport: () => { this.onOpenExportDialog() },
-          onOpenSettings: () => { this.isSettingsVisible = true }
+          onImport: () => { this.openImportDialog() },
+          onExport: () => { this.openExportDialog() }
         })
 
-        if (this.isLargeScreen()) {
-          Row() {
-            GraphCanvas({
-              workspace: this.workspace,
-              activeLayerId: this.activeLayerId,
-              selectedNodeIds: this.selectedNodeIds,
-              highlightedNodeId: this.highlightedNodeId,
-              connectingFromNodeId: this.connectingFromNodeId,
-              showGrid: this.workspace.settings.showGrid,
-              onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
-              onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
-              onClearSelection: () => { this.onClearSelection() },
-              onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
-              onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
-              onViewportChange: (x: number, y: number, zoom: number) => {
-                const next: Workspace = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
-                this.setWorkspace(next)
-              },
-              onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
-              onCanvasReady: (w: number, h: number) => {
-                this.canvasWidth = w
-                this.canvasHeight = h
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          GraphCanvas({
+            workspace: this.workspace,
+            selectedNodeId: this.selectedNodeId,
+            boxSelectMode: this.boxSelectMode,
+            selectedNodeIds: this.selectedNodeIds,
+            shouldStartConnect: $shouldStartConnect,
+            onWorkspaceChange: (ws: WorkspaceData) => { this.onWorkspaceChange(ws) },
+            onSelectedNodeChange: (id: number) => {
+              this.selectedNodeId = id
+              this.contextMenuVisible = false
+            },
+            onLongPressNode: (id: number, sx: number, sy: number) => { this.onLongPressNode(id, sx, sy) },
+            onViewportChange: (w: number, h: number) => { this.canvasWidth = w; this.canvasHeight = h },
+            onMultiSelectNodes: (nodeIds: number[]) => {
+              this.selectedNodeIds = nodeIds
+              if (nodeIds.length > 0) {
+                this.selectedNodeId = nodeIds[0]
+              } else {
+                this.selectedNodeId = -1
               }
-            })
-            .layoutWeight(1)
-
-            this.buildLargeScreenSidePanel()
-          }
-          .layoutWeight(1)
-        } else {
-          Column() {
-            GraphCanvas({
-              workspace: this.workspace,
-              activeLayerId: this.activeLayerId,
-              selectedNodeIds: this.selectedNodeIds,
-              highlightedNodeId: this.highlightedNodeId,
-              connectingFromNodeId: this.connectingFromNodeId,
-              showGrid: this.workspace.settings.showGrid,
-              onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
-              onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
-              onClearSelection: () => { this.onClearSelection() },
-              onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
-              onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
-              onViewportChange: (x: number, y: number, zoom: number) => {
-                const next: Workspace = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
-                this.setWorkspace(next)
-              },
-              onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
-              onCanvasReady: (w: number, h: number) => {
-                this.canvasWidth = w
-                this.canvasHeight = h
-              }
-            })
-            .layoutWeight(1)
-
-            this.buildMobileSidePanel()
-          }
+              this.contextMenuVisible = false
+            },
+            onMoveSelectedNodes: (nodeIds: number[], dx: number, dy: number) => {
+              this.moveSelectedNodes(nodeIds, dx, dy)
+            }
+          })
           .width('100%')
           .height('100%')
-        }
 
-        if (this.selectedNodeIds.length > 1) {
-          SelectionBar({
-            selectedCount: this.selectedNodeIds.length,
-            onConnectAll: () => { this.onConnectSelectedAll() },
-            onDisconnectSelected: () => { this.onDisconnectSelected() },
-            onDeleteSelected: () => { this.onDeleteSelected() },
-            onCancel: () => { this.onClearSelection() }
+          if (this.isPanelOpen) {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor('#44000000')
+              .position({ x: 0, y: 0 })
+              .onClick(() => {
+                this.isPanelOpen = false
+              })
+
+            ControlPanel({
+              workspace: this.workspace,
+              boxSelectMode: this.boxSelectMode,
+              alphabetSorted: this.alphabetSorted,
+              onWorkspaceChange: (ws: WorkspaceData) => { this.onWorkspaceChange(ws) },
+              onClose: () => { this.isPanelOpen = false },
+              onLocateNode: (nodeId: number) => {
+                this.locateNode(nodeId)
+                this.isPanelOpen = false
+              },
+              onRenameLayerRequest: () => {
+                this.openRenameLayerDialog()
+              },
+              onCreateLayerRequest: () => {
+                this.openCreateLayerDialog()
+              },
+              onDeleteLayer: (layerId: string) => {
+                this.deleteLayer(layerId)
+              },
+              onToggleBoxSelectMode: () => {
+                this.toggleBoxSelectMode()
+              },
+              onToggleAlphabetSort: () => {
+                this.toggleAlphabetSort()
+              }
+            })
+            .position({ x: 0, y: 0 })
+            .height('100%')
+            .zIndex(200)
+          }
+
+          if (!this.isPanelOpen) {
+            Column() {
+              Button('⚙')
+                .type(ButtonType.Circle)
+                .width(52)
+                .height(52)
+                .fontSize(22)
+                .backgroundColor(COLORS.primary)
+                .fontColor('#FFFFFF')
+                .shadow({ radius: 8, color: '#332563EB' })
+                .onClick(() => {
+                  this.isPanelOpen = true
+                })
+            }
+            .width('100%')
+            .padding({ top: 12, right: 16 })
+            .alignItems(HorizontalAlign.End)
+            .zIndex(500)
+          }
+
+          ZoomControls({
+            cameraScale: this.getCurrentCamera().scale,
+            hasSelectedNode: this.selectedNodeId >= 0,
+            boxSelectMode: this.boxSelectMode,
+            onZoomIn: () => { this.handleZoomIn() },
+            onZoomOut: () => { this.handleZoomOut() },
+            onReset: () => { this.handleZoomReset() },
+            onFit: () => { this.handleZoomFit() },
+            onAction: () => { this.openSelectedNodeMenu() },
+            onToggleBoxSelect: () => { this.toggleBoxSelectMode() }
           })
+
+          ContextMenu({
+            visible: this.contextMenuVisible,
+            menuX: this.contextMenuX,
+            menuY: this.contextMenuY,
+            onConnect: () => { this.startConnectFromSelected() },
+            onRename: () => { this.renameSelectedNode() },
+            onDelete: () => { this.deleteSelectedNode() },
+            onClose: () => { this.closeContextMenu() }
+          })
+          .zIndex(600)
         }
+        .layoutWeight(1)
+        .width('100%')
       }
       .width('100%')
       .height('100%')
       .backgroundColor(COLORS.pageBg)
-      .onAreaChange((_oldVal: Area, newVal: Area) => {
-        this.screenWidth = newVal.width as number
-      })
-
-      if (this.isSettingsVisible) {
-        Column() {
-          Column() {
-            SettingsPanel({
-              settings: this.workspace.settings,
-              onUpdateSettings: (settings: WordNetSettings) => { this.onUpdateSettings(settings) },
-              onClearAllData: () => { this.onClearAllData() },
-              onClose: () => { this.isSettingsVisible = false }
-            })
-          }
-          .width(this.isLargeScreen() ? 380 : '90%')
-          .constraintSize({ maxHeight: '80%' })
-          .backgroundColor(COLORS.panelBg)
-          .borderRadius(12)
-          .shadow({ radius: 12, color: '#33000000' })
+      .onClick(() => {
+        if (this.contextMenuVisible) {
+          this.contextMenuVisible = false
         }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#33000000')
-        .justifyContent(FlexAlign.Center)
-        .position({ x: 0, y: 0 })
-        .onClick(() => {
-          this.isSettingsVisible = false
-        })
-      }
+      })
 
       if (this.isJsonDialogVisible) {
         Column() {
           Column() {
             JsonDialog({
               mode: this.jsonDialogMode,
-              jsonText: this.jsonDialogText,
+              jsonText: this.jsonText,
               onImport: (jsonText: string) => { this.onImportJson(jsonText) },
-              onClose: () => { this.isJsonDialogVisible = false }
+              onClose: () => {
+                this.isJsonDialogVisible = false
+                this.jsonText = ''
+              }
             })
           }
-          .width(this.isLargeScreen() ? 480 : '95%')
-          .constraintSize({ maxHeight: '85%' })
+          .width('90%')
+          .height('80%')
           .backgroundColor(COLORS.panelBg)
           .borderRadius(12)
           .shadow({ radius: 12, color: '#33000000' })
         }
         .width('100%')
         .height('100%')
-        .backgroundColor
+        .backgroundColor('#44000000')
+        .justifyContent(FlexAlign.Center)
+        .position({ x: 0, y: 0 })
+        .zIndex(500)
+        .onClick(() => {
+          this.isJsonDialogVisible = false
+          this.jsonText = ''
+        })
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  private locateNode(nodeId: number): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+    let targetNode: WordNode | undefined = undefined
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        targetNode = n
+        break
+      }
+    }
+    if (!targetNode) {
+      showToast('节点不存在')
+      return
+    }
+
+    const width: number = this.canvasWidth > 0 ? this.canvasWidth : 720
+    const height: number = this.canvasHeight > 0 ? this.canvasHeight : 1000
+
+    const oldScale: number = layer.camera.scale > 0 ? layer.camera.scale : 1
+    const newScale: number = oldScale < 0.8 ? 0.8 : oldScale
+
+    const newCamera: CameraState = {
+      x: width / 2 - targetNode.x * newScale,
+      y: height / 2 - targetNode.y * newScale,
+      scale: newScale
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: layer.nodes, edges: layer.edges,
+      nextId: layer.nextId, camera: newCamera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    this.applyLayerUpdate(updatedLayer)
+    this.selectedNodeId = nodeId
+    showToast('已定位：' + targetNode.word)
+  }
+
+  private handleZoomIn(): void {
+    this.applyZoom(1.2)
+  }
+
+  private handleZoomOut(): void {
+    this.applyZoom(1 / 1.2)
+  }
+
+  private handleZoomReset(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+    const updatedCamera: CameraState = { x: 0, y: 0, scale: 1 }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: layer.nodes, edges: layer.edges,
+      nextId: layer.nextId, camera: updatedCamera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    this.applyLayerUpdate(updatedLayer)
+  }
+
+  private handleZoomFit(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer || layer.nodes.length === 0) {
+      return
+    }
+    let minX: number = Infinity
+    let maxX: number = -Infinity
+    let minY: number = Infinity
+    let maxY: number = -Infinity
+    for (const n of layer.nodes) {
+      if (n.x < minX) { minX = n.x }
+      if (n.x > maxX) { maxX = n.x }
+      if (n.y < minY) { minY = n.y }
+      if (n.y > maxY) { maxY = n.y }
+    }
+    const graphW: number = Math.max(maxX - minX, 120)
+    const graphH: number = Math.max(maxY - minY, 120)
+    const padding: number = 80
+    const vpW: number = this.canvasWidth > 0 ? this.canvasWidth : 720
+    const vpH: number = this.canvasHeight > 0 ? this.canvasHeight : 1000
+    const scaleX: number = (vpW - padding * 2) / graphW
+    const scaleY: number = (vpH - padding * 2) / graphH
+    const nextScale: number = Math.max(0.2, Math.min(2.5, Math.min(scaleX, scaleY)))
+    const centerX: number = (minX + maxX) / 2
+    const centerY: number = (minY + maxY) / 2
+    const updatedCamera: CameraState = {
+      scale: nextScale,
+      x: vpW / 2 - centerX * nextScale,
+      y: vpH / 2 - centerY * nextScale
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: layer.nodes, edges: layer.edges,
+      nextId: layer.nextId, camera: updatedCamera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    this.applyLayerUpdate(updatedLayer)
+  }
+
+  private applyZoom(factor: number): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+    const cam: CameraState = layer.camera
+    const cx: number = this.canvasWidth > 0 ? this.canvasWidth / 2 : 360
+    const cy: number = this.canvasHeight > 0 ? this.canvasHeight / 2 : 500
+    const worldX: number = (cx - cam.x) / cam.scale
+    const worldY: number = (cy - cam.y) / cam.scale
+    const nextScale: number = Math.max(0.2, Math.min(5, cam.scale * factor))
+    const updatedCamera: CameraState = {
+      scale: nextScale,
+      x: cx - worldX * nextSca

@@ -1,454 +1,509 @@
-import { Layer, Point, Viewport, WordEdge, WordNode, Workspace } from '../models/GraphModels'
-import { COLORS, MAX_ZOOM, MIN_ZOOM, NODE_HEIGHT, NODE_RADIUS, ZOOM_STEP } from '../constants/AppConstants'
-import { getNodeWidth, screenToWorld } from '../utils/GeometryUtil'
+import { CameraState, WordLayer, WordNode, WordEdge, WorkspaceData } from '../models/GraphModels'
+import { createDefaultWorkspace } from '../services/WorkspaceFactory'
+import { COLORS, NODE_RADIUS, MIN_SCALE, MAX_SCALE, ZOOM_FACTOR, LONG_PRESS_MS, LONG_PRESS_MOVE_THRESHOLD } from '../constants/AppConstants'
+import { showToast } from '../utils/ToastUtil'
+
+interface Point2D {
+  x: number
+  y: number
+}
 
 @Component
 export struct GraphCanvas {
-  @Prop workspace: Workspace = {
-    version: '1.0.0',
-    appName: 'WordNet Pro',
-    activeLayerId: '',
-    layers: [],
-    settings: {
-      autoSave: true,
-      showGrid: false,
-      defaultZoom: 1,
-      confirmBeforeDelete: true,
-      confirmBeforeClear: true
-    },
-    createdAt: '',
-    updatedAt: ''
-  }
-  @Prop activeLayerId: string = ''
-  @Prop selectedNodeIds: string[] = []
-  @Prop highlightedNodeId: string = ''
-  @Prop connectingFromNodeId: string = ''
-  @Prop showGrid: boolean = false
-  onSelectSingle: (nodeId: string) => void = (id: string) => {}
-  onSelectMultiple: (nodeIds: string[]) => void = (ids: string[]) => {}
-  onClearSelection: () => void = () => {}
-  onNodePositionChange: (nodeId: string, x: number, y: number) => void = (id: string, x: number, y: number) => {}
-  onMoveSelectedNodes: (deltaX: number, deltaY: number) => void = (dx: number, dy: number) => {}
-  onViewportChange: (x: number, y: number, zoom: number) => void = (x: number, y: number, z: number) => {}
-  onCompleteConnect: (nodeId: string) => void = (id: string) => {}
-  onCanvasReady: (width: number, height: number) => void = (w: number, h: number) => {}
+  @Prop @Watch('onDataChange') workspace: WorkspaceData = createDefaultWorkspace()
+  @Prop selectedNodeId: number = -1
+  @State connectingFromId: number = -1
+  @State highlightNodeId: number = -1
+  onWorkspaceChange: (ws: WorkspaceData) => void = (ws: WorkspaceData) => {}
+  onSelectedNodeChange: (nodeId: number) => void = (id: number) => {}
+  onLongPressNode: (nodeId: number, screenX: number, screenY: number) => void =
+    (id: number, sx: number, sy: number) => {}
+  onViewportChange: (width: number, height: number) => void = (w: number, h: number) => {}
+  boxSelectMode: boolean = false
+  selectedNodeIds: number[] = []
+  onMultiSelectNodes: (nodeIds: number[]) => void = (nodeIds: number[]) => {}
+  onMoveSelectedNodes: (nodeIds: number[], dx: number, dy: number) => void =
+    (nodeIds: number[], dx: number, dy: number) => {}
+  @Link @Watch('onStartConnectChange') shouldStartConnect: boolean
 
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(new RenderingContextSettings(true))
   private canvasWidth: number = 0
   private canvasHeight: number = 0
-  private draggingNodeId: string = ''
-  private isDraggingCanvas: boolean = false
-  private isSelectingRect: boolean = false
-  private lastPoint: Point = { x: 0, y: 0 }
-  private selectionStart: Point = { x: 0, y: 0 }
-  private selectionEnd: Point = { x: 0, y: 0 }
-  private selectedSet: Set<string> = new Set<string>()
-  private activeLayerRef: Layer | undefined = undefined
+  private isCanvasReady: boolean = false
+  private camera: CameraState = { x: 0, y: 0, scale: 1 }
+
+  private isDraggingNode: boolean = false
+  private isPanning: boolean = false
+  private isPinching: boolean = false
+  private draggingNodeId: number = -1
+  private dragStartX: number = 0
+  private dragStartY: number = 0
+  private lastX: number = 0
+  private lastY: number = 0
+  private longPressTimer: number = -1
+  private longPressTriggered: boolean = false
+  private longPressNodeId: number = -1
+  private longPressStartX: number = 0
+  private longPressStartY: number = 0
+  private longPressMenuX: number = 0
+  private longPressMenuY: number = 0
+  private pinchStartDistance: number = 0
+  private pinchStartScale: number = 1
+  private pinchCenterX: number = 0
+  private pinchCenterY: number = 0
+
+  @State isBoxSelecting: boolean = false
+  @State boxStartX: number = 0
+  @State boxStartY: number = 0
+  @State boxCurrentX: number = 0
+  @State boxCurrentY: number = 0
+  private isDraggingMultiNodes: boolean = false
+  private multiDragLastWorldX: number = 0
+  private multiDragLastWorldY: number = 0
+
+  private safeRedraw(): void {
+    if (this.isCanvasReady) {
+      this.redraw()
+    }
+  }
+
+  private onDataChange(): void {
+    this.syncCameraFromLayer()
+    this.safeRedraw()
+  }
+
+  private syncCameraFromLayer(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (layer) {
+      this.camera = { x: layer.camera.x, y: layer.camera.y, scale: layer.camera.scale }
+    }
+  }
 
   aboutToAppear(): void {
-    this.syncSelectedSet()
+    this.syncCameraFromLayer()
   }
 
-  private syncSelectedSet(): void {
-    const newSet: Set<string> = new Set<string>()
-    for (const id of this.selectedNodeIds) {
-      newSet.add(id)
-    }
-    this.selectedSet = newSet
-  }
-
-  private getActiveLayer(): Layer | undefined {
+  private getCurrentLayer(): WordLayer | undefined {
     for (const l of this.workspace.layers) {
-      if (l.id === this.activeLayerId) {
+      if (l.id === this.workspace.currentLayerId) {
         return l
       }
     }
     return undefined
   }
 
-  private getViewport(): Viewport {
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (layer) {
-      return layer.viewport
+  private toWorld(screenX: number, screenY: number): Point2D {
+    return {
+      x: (screenX - this.camera.x) / this.camera.scale,
+      y: (screenY - this.camera.y) / this.camera.scale
     }
-    return { x: 0, y: 0, zoom: 1 }
   }
 
-  private redraw(): void {
-    const ctx: CanvasRenderingContext2D = this.context
-    if (!ctx) {
+  private toScreen(worldX: number, worldY: number): Point2D {
+    return {
+      x: worldX * this.camera.scale + this.camera.x,
+      y: worldY * this.camera.scale + this.camera.y
+    }
+  }
+
+  private clampScale(s: number): number {
+    return Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
+  }
+
+  private emitCameraChange(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
       return
     }
-
-    const w: number = this.canvasWidth
-    const h: number = this.canvasHeight
-
-    ctx.clearRect(0, 0, w, h)
-
-    ctx.fillStyle = COLORS.pageBg
-    ctx.fillRect(0, 0, w, h)
-
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (!layer || layer.nodes.length === 0) {
-      ctx.fillStyle = COLORS.textSecondary
-      ctx.font = '16px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('暂无单词节点', w / 2, h / 2 - 12)
-      ctx.font = '13px sans-serif'
-      ctx.fillText('请从右侧/下方添加第一个单词', w / 2, h / 2 + 12)
-      return
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: layer.nodes, edges: layer.edges,
+      nextId: layer.nextId, camera: { x: this.camera.x, y: this.camera.y, scale: this.camera.scale },
+      createdAt: layer.createdAt, updatedAt: Date.now()
     }
-
-    const viewport: Viewport = layer.viewport
-
-    if (this.showGrid) {
-      this.drawGrid(ctx, w, h, viewport)
-    }
-
-    this.drawEdges(ctx, layer.edges, layer.nodes, viewport)
-    this.drawNodes(ctx, layer.nodes, viewport)
-
-    if (this.connectingFromNodeId.length > 0) {
-      ctx.fillStyle = COLORS.primary
-      ctx.font = '12px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText('点击目标节点完成连接', w / 2, 30)
-    }
-
-    if (this.isSelectingRect) {
-      this.drawSelectionRect(ctx, viewport)
-    }
-  }
-
-  private drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, viewport: Viewport): void {
-    const gridSize: number = 40 * viewport.zoom
-    const offsetX: number = viewport.x % gridSize
-    const offsetY: number = viewport.y % gridSize
-
-    ctx.strokeStyle = '#E2E8F0'
-    ctx.lineWidth = 0.5
-    ctx.beginPath()
-
-    for (let x: number = offsetX; x < w; x += gridSize) {
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, h)
-    }
-    for (let y: number = offsetY; y < h; y += gridSize) {
-      ctx.moveTo(0, y)
-      ctx.lineTo(w, y)
-    }
-    ctx.stroke()
-  }
-
-  private drawEdges(ctx: CanvasRenderingContext2D, edges: WordEdge[], nodes: WordNode[],
-    viewport: Viewport): void {
-    const nodeMap: Map<string, WordNode> = new Map<string, WordNode>()
-    for (const node of nodes) {
-      nodeMap.set(node.id, node)
-    }
-
-    for (const edge of edges) {
-      const sourceNode: WordNode | undefined = nodeMap.get(edge.source)
-      const targetNode: WordNode | undefined = nodeMap.get(edge.target)
-      if (!sourceNode || !targetNode) {
-        continue
-      }
-
-      const sx: number = sourceNode.x * viewport.zoom + viewport.x
-      const sy: number = sourceNode.y * viewport.zoom + viewport.y
-      const tx: number = targetNode.x * viewport.zoom + viewport.x
-      const ty: number = targetNode.y * viewport.zoom + viewport.y
-
-      const bothSelected: boolean = this.selectedSet.has(edge.source) && this.selectedSet.has(edge.target)
-
-      ctx.beginPath()
-      ctx.moveTo(sx, sy)
-      ctx.lineTo(tx, ty)
-      ctx.strokeStyle = bothSelected ? COLORS.edgeSelected : COLORS.edge
-      ctx.lineWidth = bothSelected ? 2 : 1.5
-      ctx.stroke()
-    }
-  }
-
-  private drawNodes(ctx: CanvasRenderingContext2D, nodes: WordNode[], viewport: Viewport): void {
-    for (const node of nodes) {
-      const screenX: number = node.x * viewport.zoom + viewport.x
-      const screenY: number = node.y * viewport.zoom + viewport.y
-      const nodeW: number = getNodeWidth(node.label) * viewport.zoom
-      const nodeH: number = NODE_HEIGHT * viewport.zoom
-      const radius: number = NODE_RADIUS * viewport.zoom
-
-      const left: number = screenX - nodeW / 2
-      const top: number = screenY - nodeH / 2
-
-      ctx.beginPath()
-      ctx.moveTo(left + radius, top)
-      ctx.lineTo(left + nodeW - radius, top)
-      ctx.quadraticCurveTo(left + nodeW, top, left + nodeW, top + radius)
-      ctx.lineTo(left + nodeW, top + nodeH - radius)
-      ctx.quadraticCurveTo(left + nodeW, top + nodeH, left + nodeW - radius, top + nodeH)
-      ctx.lineTo(left + radius, top + nodeH)
-      ctx.quadraticCurveTo(left, top + nodeH, left, top + nodeH - radius)
-      ctx.lineTo(left, top + radius)
-      ctx.quadraticCurveTo(left, top, left + radius, top)
-      ctx.closePath()
-
-      ctx.fillStyle = COLORS.nodeBg
-      ctx.fill()
-
-      const isSelected: boolean = this.selectedSet.has(node.id)
-      const isHighlighted: boolean = node.id === this.highlightedNodeId
-
-      if (isHighlighted) {
-        ctx.strokeStyle = COLORS.nodeHighlightedBorder
-        ctx.lineWidth = 3
-      } else if (isSelected) {
-        ctx.strokeStyle = COLORS.nodeSelectedBorder
-        ctx.lineWidth = 2.5
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === updatedLayer.id) {
+        updatedLayers.push(updatedLayer)
       } else {
-        ctx.strokeStyle = COLORS.nodeBorder
-        ctx.lineWidth = 1
+        updatedLayers.push(l)
       }
-      ctx.stroke()
-
-      const fontSize: number = Math.max(11, 14 * viewport.zoom)
-      ctx.fillStyle = COLORS.textPrimary
-      ctx.font = fontSize + 'px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-
-      const maxTextWidth: number = nodeW - 12 * viewport.zoom
-      let displayLabel: string = node.label
-      const textMetrics: TextMetrics = ctx.measureText(displayLabel)
-      if (textMetrics.width > maxTextWidth && maxTextWidth > 0) {
-        while (displayLabel.length > 1 && ctx.measureText(displayLabel + '…').width > maxTextWidth) {
-          displayLabel = displayLabel.slice(0, -1)
-        }
-        displayLabel = displayLabel + '…'
-      }
-      ctx.fillText(displayLabel, screenX, screenY)
     }
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
   }
 
-  private drawSelectionRect(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
-    const startScreenX: number = this.selectionStart.x * viewport.zoom + viewport.x
-    const startScreenY: number = this.selectionStart.y * viewport.zoom + viewport.y
-    const endScreenX: number = this.selectionEnd.x * viewport.zoom + viewport.x
-    const endScreenY: number = this.selectionEnd.y * viewport.zoom + viewport.y
-
-    const left: number = Math.min(startScreenX, endScreenX)
-    const top: number = Math.min(startScreenY, endScreenY)
-    const width: number = Math.abs(endScreenX - startScreenX)
-    const height: number = Math.abs(endScreenY - startScreenY)
-
-    ctx.fillStyle = COLORS.selectionFill
-    ctx.fillRect(left, top, width, height)
-    ctx.strokeStyle = COLORS.selectionStroke
-    ctx.lineWidth = 1
-    ctx.setLineDash([4, 4])
-    ctx.strokeRect(left, top, width, height)
-    ctx.setLineDash([])
+  private emitNodePositionChange(nodeId: number, x: number, y: number): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        updatedNodes.push({ id: n.id, word: n.word, x: x, y: y, note: n.note })
+      } else {
+        updatedNodes.push(n)
+      }
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: updatedNodes, edges: layer.edges,
+      nextId: layer.nextId, camera: layer.camera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === updatedLayer.id) {
+        updatedLayers.push(updatedLayer)
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
   }
 
-  private hitTestNode(screenX: number, screenY: number, nodes: WordNode[],
-    viewport: Viewport): WordNode | undefined {
-    for (let i: number = nodes.length - 1; i >= 0; i--) {
-      const node: WordNode = nodes[i]
-      const nodeScreenX: number = node.x * viewport.zoom + viewport.x
-      const nodeScreenY: number = node.y * viewport.zoom + viewport.y
-      const nodeW: number = getNodeWidth(node.label) * viewport.zoom
-      const nodeH: number = NODE_HEIGHT * viewport.zoom
+  public zoomIn(): void {
+    this.zoomAtCenter(ZOOM_FACTOR)
+  }
 
-      const left: number = nodeScreenX - nodeW / 2
-      const top: number = nodeScreenY - nodeH / 2
+  public zoomOut(): void {
+    this.zoomAtCenter(1 / ZOOM_FACTOR)
+  }
 
-      if (screenX >= left && screenX <= left + nodeW &&
-        screenY >= top && screenY <= top + nodeH) {
+  public resetZoom(): void {
+    this.camera = { x: 0, y: 0, scale: 1 }
+    this.emitCameraChange()
+    this.safeRedraw()
+  }
+
+  public fitView(): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer || layer.nodes.length === 0) {
+      this.camera = { x: this.canvasWidth / 2, y: this.canvasHeight / 2, scale: 1 }
+      this.emitCameraChange()
+      this.safeRedraw()
+      return
+    }
+    let minX: number = Infinity
+    let maxX: number = -Infinity
+    let minY: number = Infinity
+    let maxY: number = -Infinity
+    for (const n of layer.nodes) {
+      if (n.x < minX) { minX = n.x }
+      if (n.x > maxX) { maxX = n.x }
+      if (n.y < minY) { minY = n.y }
+      if (n.y > maxY) { maxY = n.y }
+    }
+    const graphW: number = Math.max(maxX - minX, 120)
+    const graphH: number = Math.max(maxY - minY, 120)
+    const padding: number = 80
+    const scaleX: number = (this.canvasWidth - padding * 2) / graphW
+    const scaleY: number = (this.canvasHeight - padding * 2) / graphH
+    const nextScale: number = this.clampScale(Math.min(scaleX, scaleY))
+    const centerX: number = (minX + maxX) / 2
+    const centerY: number = (minY + maxY) / 2
+    this.camera = {
+      scale: nextScale,
+      x: this.canvasWidth / 2 - centerX * nextScale,
+      y: this.canvasHeight / 2 - centerY * nextScale
+    }
+    this.emitCameraChange()
+    this.safeRedraw()
+  }
+
+  private zoomAtCenter(factor: number): void {
+    const cx: number = this.canvasWidth / 2
+    const cy: number = this.canvasHeight / 2
+    this.zoomAt(cx, cy, factor)
+  }
+
+  private zoomAt(screenX: number, screenY: number, factor: number): void {
+    const before: Point2D = this.toWorld(screenX, screenY)
+    const nextScale: number = this.clampScale(this.camera.scale * factor)
+    this.camera.scale = nextScale
+    this.camera.x = screenX - before.x * nextScale
+    this.camera.y = screenY - before.y * nextScale
+    this.emitCameraChange()
+    this.safeRedraw()
+  }
+
+  public selectNode(nodeId: number): void {
+    this.onSelectedNodeChange(nodeId)
+    this.safeRedraw()
+  }
+
+  public highlightNode(nodeId: number): void {
+    this.highlightNodeId = nodeId
+    this.safeRedraw()
+  }
+
+  private hitTestNode(screenX: number, screenY: number): WordNode | undefined {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return undefined
+    }
+    const world: Point2D = this.toWorld(screenX, screenY)
+    for (let i: number = layer.nodes.length - 1; i >= 0; i--) {
+      const node: WordNode = layer.nodes[i]
+      const dx: number = node.x - world.x
+      const dy: number = node.y - world.y
+      if (Math.sqrt(dx * dx + dy * dy) <= NODE_RADIUS) {
         return node
       }
     }
     return undefined
   }
 
-  private handlePointerDown(screenX: number, screenY: number): void {
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (!layer) {
+  private clearLongPressTimer(): void {
+    if (this.longPressTimer >= 0) {
+      clearTimeout(this.longPressTimer)
+      this.longPressTimer = -1
+    }
+  }
+
+  private startLongPressIfNode(screenX: number, screenY: number): void {
+    this.clearLongPressTimer()
+    this.longPressNodeId = -1
+
+    const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
+    if (!hitNode) {
       return
     }
 
-    const viewport: Viewport = layer.viewport
-    const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY, layer.nodes, viewport)
-    this.lastPoint = { x: screenX, y: screenY }
+    this.longPressNodeId = hitNode.id
+    this.longPressStartX = screenX
+    this.longPressStartY = screenY
+    this.longPressMenuX = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
+    this.longPressMenuY = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
+
+    this.longPressTimer = setTimeout(() => {
+      if (this.longPressNodeId >= 0) {
+        this.longPressTriggered = true
+        this.isDraggingNode = false
+        this.onLongPressNode(this.longPressNodeId, this.longPressMenuX, this.longPressMenuY)
+      }
+      this.longPressTimer = -1
+    }, LONG_PRESS_MS) as number
+  }
+
+  private handleBoxSelectDown(screenX: number, screenY: number): boolean {
+    if (!this.boxSelectMode) {
+      return false
+    }
+
+    const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
 
     if (hitNode) {
-      if (this.connectingFromNodeId.length > 0 && hitNode.id !== this.connectingFromNodeId) {
-        this.onCompleteConnect(hitNode.id)
-        return
+      if (this.selectedNodeIds.includes(hitNode.id)) {
+        const worldPoint: Point2D = this.toWorld(screenX, screenY)
+        this.isDraggingMultiNodes = true
+        this.multiDragLastWorldX = worldPoint.x
+        this.multiDragLastWorldY = worldPoint.y
+        return true
       }
 
-      this.draggingNodeId = hitNode.id
-      if (!this.selectedSet.has(hitNode.id)) {
-        this.onSelectSingle(hitNode.id)
-      }
-    } else {
-      if (this.connectingFromNodeId.length > 0) {
-        return
-      }
-
-      this.isDraggingCanvas = true
-      this.onClearSelection()
+      this.onMultiSelectNodes([hitNode.id])
+      return true
     }
+
+    this.isBoxSelecting = true
+    this.boxStartX = screenX
+    this.boxStartY = screenY
+    this.boxCurrentX = screenX
+    this.boxCurrentY = screenY
+    this.onMultiSelectNodes([])
+
+    return true
+  }
+
+  private handleBoxSelectMove(screenX: number, screenY: number): boolean {
+    if (!this.boxSelectMode) {
+      return false
+    }
+
+    if (this.isBoxSelecting) {
+      this.boxCurrentX = screenX
+      this.boxCurrentY = screenY
+      this.safeRedraw()
+      return true
+    }
+
+    if (this.isDraggingMultiNodes) {
+      const worldPoint: Point2D = this.toWorld(screenX, screenY)
+
+      const dx: number = worldPoint.x - this.multiDragLastWorldX
+      const dy: number = worldPoint.y - this.multiDragLastWorldY
+
+      this.multiDragLastWorldX = worldPoint.x
+      this.multiDragLastWorldY = worldPoint.y
+
+      if (this.selectedNodeIds.length > 0) {
+        this.onMoveSelectedNodes(this.selectedNodeIds, dx, dy)
+      }
+
+      return true
+    }
+
+    return false
+  }
+
+  private handleBoxSelectUp(): boolean {
+    if (!this.boxSelectMode) {
+      return false
+    }
+
+    if (this.isDraggingMultiNodes) {
+      this.isDraggingMultiNodes = false
+      return true
+    }
+
+    if (!this.isBoxSelecting) {
+      return false
+    }
+
+    const selectedIds: number[] = this.getNodesInSelectionBox()
+
+    this.isBoxSelecting = false
+    this.safeRedraw()
+
+    this.onMultiSelectNodes(selectedIds)
+
+    if (selectedIds.length > 0) {
+      showToast('已选中 ' + selectedIds.length.toString() + ' 个节点')
+    } else {
+      showToast('未选中节点')
+    }
+
+    return true
+  }
+
+  private getNodesInSelectionBox(): number[] {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return []
+    }
+
+    const left: number = Math.min(this.boxStartX, this.boxCurrentX)
+    const right: number = Math.max(this.boxStartX, this.boxCurrentX)
+    const top: number = Math.min(this.boxStartY, this.boxCurrentY)
+    const bottom: number = Math.max(this.boxStartY, this.boxCurrentY)
+
+    const topLeftWorld: Point2D = this.toWorld(left, top)
+    const bottomRightWorld: Point2D = this.toWorld(right, bottom)
+
+    const worldLeft: number = Math.min(topLeftWorld.x, bottomRightWorld.x)
+    const worldRight: number = Math.max(topLeftWorld.x, bottomRightWorld.x)
+    const worldTop: number = Math.min(topLeftWorld.y, bottomRightWorld.y)
+    const worldBottom: number = Math.max(topLeftWorld.y, bottomRightWorld.y)
+
+    const ids: number[] = []
+
+    for (const node of layer.nodes) {
+      if (
+        node.x >= worldLeft &&
+        node.x <= worldRight &&
+        node.y >= worldTop &&
+        node.y <= worldBottom
+      ) {
+        ids.push(node.id)
+      }
+    }
+
+    return ids
+  }
+
+  private drawSelectionBox(ctx: CanvasRenderingContext2D): void {
+    if (!this.isBoxSelecting) {
+      return
+    }
+
+    const left: number = Math.min(this.boxStartX, this.boxCurrentX)
+    const top: number = Math.min(this.boxStartY, this.boxCurrentY)
+    const width: number = Math.abs(this.boxCurrentX - this.boxStartX)
+    const height: number = Math.abs(this.boxCurrentY - this.boxStartY)
+
+    if (width < 2 && height < 2) {
+      return
+    }
+
+    ctx.save()
+    ctx.strokeStyle = COLORS.primary
+    ctx.lineWidth = 1.5
+    ctx.setLineDash([6, 4])
+    ctx.strokeRect(left, top, width, height)
+    ctx.restore()
+  }
+
+  private handlePointerDown(screenX: number, screenY: number): void {
+    if (this.longPressTriggered) {
+      this.longPressTriggered = false
+      return
+    }
+
+    if (this.handleBoxSelectDown(screenX, screenY)) {
+      return
+    }
+
+    this.lastX = screenX
+    this.lastY = screenY
+
+    const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
+
+    if (hitNode) {
+      if (this.connectingFromId >= 0 && hitNode.id !== this.connectingFromId) {
+        this.completeConnection(hitNode.id)
+        return
+      }
+      this.isDraggingNode = true
+      this.draggingNodeId = hitNode.id
+      this.dragStartX = screenX
+      this.dragStartY = screenY
+      this.onSelectedNodeChange(hitNode.id)
+    } else {
+      this.isPanning = true
+      this.onSelectedNodeChange(-1)
+      this.connectingFromId = -1
+    }
+    this.safeRedraw()
   }
 
   private handlePointerMove(screenX: number, screenY: number): void {
-    const layer: Layer | undefined = this.getActiveLayer()
-    if (!layer) {
+    if (this.handleBoxSelectMove(screenX, screenY)) {
       return
     }
 
-    const viewport: Viewport = layer.viewport
-    const dx: number = screenX - this.lastPoint.x
-    const dy: number = screenY - this.lastPoint.y
+    if (this.isDraggingNode && !this.longPressTriggered) {
+      if (this.longPressNodeId >= 0) {
+        const dxFromStart: number = screenX - this.longPressStartX
+        const dyFromStart: number = screenY - this.longPressStartY
+        const distFromStart: number = Math.sqrt(dxFromStart * dxFromStart + dyFromStart * dyFromStart)
+        if (distFromStart > LONG_PRESS_MOVE_THRESHOLD) {
+          this.clearLongPressTimer()
+          this.longPressNodeId = -1
+        } else {
+          this.lastX = screenX
+          this.lastY = screenY
+          return
+        }
+      }
 
-    if (this.draggingNodeId.length > 0) {
-      const worldDx: number = dx / viewport.zoom
-      const worldDy: number = dy / viewport.zoom
-
-      if (this.selectedSet.has(this.draggingNodeId) && this.selectedNodeIds.length > 1) {
-        this.onMoveSelectedNodes(worldDx, worldDy)
-      } else {
-        let node: WordNode | undefined = undefined
+      const dx: number = screenX - this.lastX
+      const dy: number = screenY - this.lastY
+      const layer: WordLayer | undefined = this.getCurrentLayer()
+      if (layer) {
         for (const n of layer.nodes) {
           if (n.id === this.draggingNodeId) {
-            node = n
+            this.emitNodePositionChange(n.id, n.x + dx / this.camera.scale, n.y + dy / this.camera.scale)
             break
           }
         }
-        if (node) {
-          this.onNodePositionChange(this.draggingNodeId, node.x + worldDx, node.y + worldDy)
-        }
       }
-    } else if (this.isDraggingCanvas) {
-      this.onViewportChange(viewport.x + dx, viewport.y + dy, viewport.zoom)
-    }
-
-    this.lastPoint = { x: screenX, y: screenY }
-  }
-
-  private handlePointerUp(): void {
-    this.draggingNodeId = ''
-    this.isDraggingCanvas = false
-    this.isSelectingRect = false
-  }
-
-  private zoomIn(): void {
-    const viewport: Viewport = this.getViewport()
-    const newZoom: number = Math.min(viewport.zoom + ZOOM_STEP, MAX_ZOOM)
-    const cx: number = this.canvasWidth / 2
-    const cy: number = this.canvasHeight / 2
-    const worldCx: number = (cx - viewport.x) / viewport.zoom
-    const worldCy: number = (cy - viewport.y) / viewport.zoom
-    const newX: number = cx - worldCx * newZoom
-    const newY: number = cy - worldCy * newZoom
-    this.onViewportChange(newX, newY, newZoom)
-  }
-
-  private zoomOut(): void {
-    const viewport: Viewport = this.getViewport()
-    const newZoom: number = Math.max(viewport.zoom - ZOOM_STEP, MIN_ZOOM)
-    const cx: number = this.canvasWidth / 2
-    const cy: number = this.canvasHeight / 2
-    const worldCx: number = (cx - viewport.x) / viewport.zoom
-    const worldCy: number = (cy - viewport.y) / viewport.zoom
-    const newX: number = cx - worldCx * newZoom
-    const newY: number = cy - worldCy * newZoom
-    this.onViewportChange(newX, newY, newZoom)
-  }
-
-  private zoomReset(): void {
-    this.onViewportChange(0, 0, 1)
-  }
-
-  build() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      Canvas(this.context)
-        .width('100%')
-        .height('100%')
-        .onReady(() => {
-          this.canvasWidth = this.context.width
-          this.canvasHeight = this.context.height
-          this.onCanvasReady(this.canvasWidth, this.canvasHeight)
-          this.redraw()
-        })
-        .onAreaChange((_oldVal: Area, newVal: Area) => {
-          if ((newVal.width as number) > 0 && (newVal.height as number) > 0) {
-            this.canvasWidth = newVal.width as number
-            this.canvasHeight = newVal.height as number
-            this.redraw()
-          }
-        })
-        .gesture(
-          GestureGroup(GestureMode.Parallel,
-            PanGesture({ distance: 1 })
-              .onActionStart((event: GestureEvent) => {
-                this.handlePointerDown(event.fingerList[0].localX, event.fingerList[0].localY)
-              })
-              .onActionUpdate((event: GestureEvent) => {
-                this.handlePointerMove(event.fingerList[0].localX, event.fingerList[0].localY)
-              })
-              .onActionEnd(() => {
-                this.handlePointerUp()
-              })
-          )
-        )
-
-      Column({ space: 6 }) {
-        Button('+')
-          .type(ButtonType.Circle)
-          .width(36)
-          .height(36)
-          .fontSize(18)
-          .backgroundColor(COLORS.panelBg)
-          .fontColor(COLORS.textPrimary)
-          .shadow({ radius: 4, color: '#1A000000' })
-          .onClick(() => {
-            this.zoomIn()
-          })
-
-        Button('-')
-          .type(ButtonType.Circle)
-          .width(36)
-          .height(36)
-          .fontSize(18)
-          .backgroundColor(COLORS.panelBg)
-          .fontColor(COLORS.textPrimary)
-          .shadow({ radius: 4, color: '#1A000000' })
-          .onClick(() => {
-            this.zoomOut()
-          })
-
-        Button('1:1')
-          .type(ButtonType.Normal)
-          .width(36)
-          .height(36)
-          .fontSize(10)
-          .borderRadius(18)
-          .backgroundColor(COLORS.panelBg)
-          .fontColor(COLORS.textPrimary)
-          .shadow({ radius: 4, color: '#1A000000' })
-          .onClick(() => {
-            this.zoomReset()
-          })
-      }
-      .padding(12)
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(COLORS.pageBg)
-    .onAppear(() => {
-      this.syncSelectedSet()
-    })
-  }
-}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+    } else if (this.isPanning) {
+      const dx: number = screenX - this.lastX
+      const dy: number = screenY - this.lastY
+      this.camera.x += dx
+      this.camera.y += dy
+      this.emitCameraCha
