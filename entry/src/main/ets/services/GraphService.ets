@@ -1,4 +1,4 @@
-import { Layer, SearchResult, WordEdge, WordNode, Workspace } from '../models/GraphModels'
+import { Layer, SearchResult, Viewport, WordEdge, WordNode, Workspace } from '../models/GraphModels'
 import { createEdge, createLayer, createNode } from './WorkspaceFactory'
 import { makeEdgeKey } from '../utils/GeometryUtil'
 import { nowIso } from '../utils/TimeUtil'
@@ -31,8 +31,9 @@ function cloneEdge(e: WordEdge): WordEdge {
   return result
 }
 
-function cloneViewport(v: { x: number, y: number, zoom: number }): { x: number, y: number, zoom: number } {
-  return { x: v.x, y: v.y, zoom: v.zoom }
+function cloneViewport(v: Viewport): Viewport {
+  const result: Viewport = { x: v.x, y: v.y, zoom: v.zoom }
+  return result
 }
 
 function cloneLayer(l: Layer): Layer {
@@ -485,4 +486,4 @@ export class GraphService {
 
     const updatedEdges: WordEdge[] = []
     for (const e of layer.edges) {
-      upd
+      updatedEdges.push(e

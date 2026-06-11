@@ -28,8 +28,8 @@ export class StorageService {
         return result.data
       }
       return undefined
-    } catch (err: Error) {
-      console.error('[StorageService] loadWorkspace failed: ' + err.message)
+    } catch (err) {
+      console.error('[StorageService] loadWorkspace failed')
       return undefined
     }
   }
@@ -40,9 +40,9 @@ export class StorageService {
       const jsonStr: string = JSON.stringify(workspace)
       await store.put(STORAGE_WORKSPACE_KEY, jsonStr)
       await store.flush()
-    } catch (err: Error) {
-      console.error('[StorageService] saveWorkspace failed: ' + err.message)
-      throw new Error('保存失败: ' + err.message)
+    } catch (err) {
+      console.error('[StorageService] saveWorkspace failed')
+      throw new Error('保存失败')
     }
   }
 
@@ -51,4 +51,5 @@ export class StorageService {
       const store: preferences.Preferences = await getPreferences(context)
       await store.delete(STORAGE_WORKSPACE_KEY)
       await store.flush()
-    } c
+    } catch (err) {
+      console.error('[StorageService] clearWorksp

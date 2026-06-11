@@ -69,8 +69,8 @@ struct Index {
         this.workspace = defaultWs
         this.activeLayerId = defaultWs.activeLayerId
       }
-    } catch (err: Error) {
-      console.error('[Index] initWorkspace failed: ' + err.message)
+    } catch (err) {
+      console.error('[Index] initWorkspace failed')
       const defaultWs: Workspace = createDefaultWorkspace()
       this.workspace = defaultWs
       this.activeLayerId = defaultWs.activeLayerId
@@ -86,7 +86,7 @@ struct Index {
       if (showToastFlag) {
         showToast('保存成功')
       }
-    } catch (err: Error) {
+    } catch (err) {
       this.saveStatus = 'failed'
       showToast('保存失败，请导出 JSON 备份')
     }
@@ -391,8 +391,8 @@ struct Index {
       this.isJsonDialogVisible = false
       this.saveWorkspace(false)
       showToast('导入成功')
-    } catch (err: Error) {
-      showToast('导入失败: ' + err.message)
+    } catch (err) {
+      showToast('导入失败')
     }
   }
 
@@ -755,4 +755,6 @@ struct Index {
           .borderRadius(12)
           .shadow({ radius: 12, color: '#33000000' })
         }
-        .width('10
+        .width('100%')
+        .height('100%')
+        .backgroundColor
