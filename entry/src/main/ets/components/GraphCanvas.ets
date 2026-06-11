@@ -1,10 +1,24 @@
-import { Layer, Point, Rect, Viewport, WordEdge, WordNode, Workspace } from '../models/GraphModels'
+import { Layer, Point, Viewport, WordEdge, WordNode, Workspace } from '../models/GraphModels'
 import { COLORS, MAX_ZOOM, MIN_ZOOM, NODE_HEIGHT, NODE_RADIUS, ZOOM_STEP } from '../constants/AppConstants'
-import { getNodeRect, getNodeWidth, isNodeInRect, normalizeRect, screenToWorld } from '../utils/GeometryUtil'
+import { getNodeWidth, screenToWorld } from '../utils/GeometryUtil'
 
 @Component
 export struct GraphCanvas {
-  @Prop workspace!: Workspace
+  @Prop workspace: Workspace = {
+    version: '1.0.0',
+    appName: 'WordNet Pro',
+    activeLayerId: '',
+    layers: [],
+    settings: {
+      autoSave: true,
+      showGrid: false,
+      defaultZoom: 1,
+      confirmBeforeDelete: true,
+      confirmBeforeClear: true
+    },
+    createdAt: '',
+    updatedAt: ''
+  }
   @Prop activeLayerId: string = ''
   @Prop selectedNodeIds: string[] = []
   @Prop highlightedNodeId: string = ''
@@ -36,11 +50,20 @@ export struct GraphCanvas {
   }
 
   private syncSelectedSet(): void {
-    this.selectedSet = new Set<string>(this.selectedNodeIds)
+    const newSet: Set<string> = new Set<string>()
+    for (const id of this.selectedNodeIds) {
+      newSet.add(id)
+    }
+    this.selectedSet = newSet
   }
 
   private getActiveLayer(): Layer | undefined {
-    return this.workspace.layers.find((l: Layer) => l.id === this.activeLayerId)
+    for (const l of this.workspace.layers) {
+      if (l.id === this.activeLayerId) {
+        return l
+      }
+    }
+    return undefined
   }
 
   private getViewport(): Viewport {
@@ -191,7 +214,7 @@ export struct GraphCanvas {
 
       const fontSize: number = Math.max(11, 14 * viewport.zoom)
       ctx.fillStyle = COLORS.textPrimary
-      ctx.font = `${fontSize}px sans-serif`
+      ctx.font = fontSize + 'px sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
 
@@ -248,38 +271,6 @@ export struct GraphCanvas {
     return undefined
   }
 
-  private handleTouchStart(event: TouchEvent): void {
-    if (event.touches.length !== 1) {
-      return
-    }
-    const touch: TouchEventTouchObject = event.touches[0]
-    this.handlePointerDown(touch.x, touch.y)
-  }
-
-  private handleTouchMove(event: TouchEvent): void {
-    if (event.touches.length !== 1) {
-      return
-    }
-    const touch: TouchEventTouchObject = event.touches[0]
-    this.handlePointerMove(touch.x, touch.y)
-  }
-
-  private handleTouchEnd(event: TouchEvent): void {
-    this.handlePointerUp()
-  }
-
-  private handleMouseDown(event: MouseEvent): void {
-    this.handlePointerDown(event.x, event.y)
-  }
-
-  private handleMouseMove(event: MouseEvent): void {
-    this.handlePointerMove(event.x, event.y)
-  }
-
-  private handleMouseUp(event: MouseEvent): void {
-    this.handlePointerUp()
-  }
-
   private handlePointerDown(screenX: number, screenY: number): void {
     const layer: Layer | undefined = this.getActiveLayer()
     if (!layer) {
@@ -305,8 +296,6 @@ export struct GraphCanvas {
         return
       }
 
-      const worldPoint: Point = screenToWorld({ x: screenX, y: screenY }, viewport)
-
       this.isDraggingCanvas = true
       this.onClearSelection()
     }
@@ -329,9 +318,13 @@ export struct GraphCanvas {
       if (this.selectedSet.has(this.draggingNodeId) && this.selectedNodeIds.length > 1) {
         this.onMoveSelectedNodes(worldDx, worldDy)
       } else {
-        const node: WordNode | undefined = layer.nodes.find(
-          (n: WordNode) => n.id === this.draggingNodeId
-        )
+        let node: WordNode | undefined = undefined
+        for (const n of layer.nodes) {
+          if (n.id === this.draggingNodeId) {
+            node = n
+            break
+          }
+        }
         if (node) {
           this.onNodePositionChange(this.draggingNodeId, node.x + worldDx, node.y + worldDy)
         }
@@ -389,7 +382,7 @@ export struct GraphCanvas {
           this.redraw()
         })
         .onAreaChange((_oldVal: Area, newVal: Area) => {
-          if (newVal.width > 0 && newVal.height > 0) {
+          if ((newVal.width as number) > 0 && (newVal.height as number) > 0) {
             this.canvasWidth = newVal.width as number
             this.canvasHeight = newVal.height as number
             this.redraw()
@@ -457,9 +450,5 @@ export struct GraphCanvas {
       this.syncSelectedSet()
     })
   }
-
-  private applyRedraw(): void {
-    this.syncSelectedSet()
-    this.redraw()
-  }
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                

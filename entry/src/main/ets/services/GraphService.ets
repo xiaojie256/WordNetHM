@@ -3,11 +3,120 @@ import { createEdge, createLayer, createNode } from './WorkspaceFactory'
 import { makeEdgeKey } from '../utils/GeometryUtil'
 import { nowIso } from '../utils/TimeUtil'
 import { generateId } from '../utils/IdUtil'
-import { DEFAULT_LAYER_NAME } from '../constants/AppConstants'
+
+function cloneNode(n: WordNode): WordNode {
+  const result: WordNode = {
+    id: n.id,
+    label: n.label,
+    x: n.x,
+    y: n.y,
+    note: n.note,
+    style: { color: n.style.color, size: n.style.size },
+    createdAt: n.createdAt,
+    updatedAt: n.updatedAt
+  }
+  return result
+}
+
+function cloneEdge(e: WordEdge): WordEdge {
+  const result: WordEdge = {
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    relationType: e.relationType,
+    label: e.label,
+    createdAt: e.createdAt,
+    updatedAt: e.updatedAt
+  }
+  return result
+}
+
+function cloneViewport(v: { x: number, y: number, zoom: number }): { x: number, y: number, zoom: number } {
+  return { x: v.x, y: v.y, zoom: v.zoom }
+}
+
+function cloneLayer(l: Layer): Layer {
+  const clonedNodes: WordNode[] = []
+  for (const n of l.nodes) {
+    clonedNodes.push(cloneNode(n))
+  }
+  const clonedEdges: WordEdge[] = []
+  for (const e of l.edges) {
+    clonedEdges.push(cloneEdge(e))
+  }
+  const result: Layer = {
+    id: l.id,
+    name: l.name,
+    nodes: clonedNodes,
+    edges: clonedEdges,
+    viewport: cloneViewport(l.viewport),
+    createdAt: l.createdAt,
+    updatedAt: l.updatedAt
+  }
+  return result
+}
+
+function cloneWorkspace(ws: Workspace): Workspace {
+  const clonedLayers: Layer[] = []
+  for (const l of ws.layers) {
+    clonedLayers.push(cloneLayer(l))
+  }
+  const result: Workspace = {
+    version: ws.version,
+    appName: ws.appName,
+    activeLayerId: ws.activeLayerId,
+    layers: clonedLayers,
+    settings: {
+      autoSave: ws.settings.autoSave,
+      showGrid: ws.settings.showGrid,
+      defaultZoom: ws.settings.defaultZoom,
+      confirmBeforeDelete: ws.settings.confirmBeforeDelete,
+      confirmBeforeClear: ws.settings.confirmBeforeClear
+    },
+    createdAt: ws.createdAt,
+    updatedAt: ws.updatedAt
+  }
+  return result
+}
+
+function buildUpdatedLayers(layers: Layer[], targetLayerId: string, updatedLayer: Layer): Layer[] {
+  const result: Layer[] = []
+  for (const l of layers) {
+    if (l.id === targetLayerId) {
+      result.push(updatedLayer)
+    } else {
+      result.push(l)
+    }
+  }
+  return result
+}
+
+function buildUpdatedWorkspace(ws: Workspace, layers: Layer[], extra?: PartialWorkspace): Workspace {
+  const result: Workspace = {
+    version: ws.version,
+    appName: ws.appName,
+    activeLayerId: extra?.activeLayerId ?? ws.activeLayerId,
+    layers: layers,
+    settings: ws.settings,
+    createdAt: ws.createdAt,
+    updatedAt: extra?.updatedAt ?? ws.updatedAt
+  }
+  return result
+}
+
+interface PartialWorkspace {
+  activeLayerId?: string
+  updatedAt?: string
+}
 
 export class GraphService {
   static getActiveLayer(workspace: Workspace): Layer | undefined {
-    return workspace.layers.find((l: Layer) => l.id === workspace.activeLayerId)
+    for (const l of workspace.layers) {
+      if (l.id === workspace.activeLayerId) {
+        return l
+      }
+    }
+    return undefined
   }
 
   static addNode(workspace: Workspace, label: string, x: number, y: number): Workspace {
@@ -22,28 +131,36 @@ export class GraphService {
     }
 
     const lowerLabel: string = trimmedLabel.toLowerCase()
-    const duplicate: WordNode | undefined = layer.nodes.find(
-      (n: WordNode) => n.label.toLowerCase() === lowerLabel
-    )
-    if (duplicate) {
+    let duplicateFound: boolean = false
+    for (const n of layer.nodes) {
+      if (n.label.toLowerCase() === lowerLabel) {
+        duplicateFound = true
+        break
+      }
+    }
+    if (duplicateFound) {
       return workspace
     }
 
     const newNode: WordNode = createNode(trimmedLabel, x, y)
-    const updatedNodes: WordNode[] = [...layer.nodes, newNode]
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
+      updatedNodes.push(n)
+    }
+    updatedNodes.push(newNode)
+
     const updatedLayer: Layer = {
-      ...layer,
+      id: layer.id,
+      name: layer.name,
       nodes: updatedNodes,
+      edges: layer.edges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
       updatedAt: nowIso()
     }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return {
-      ...workspace,
-      layers: updatedLayers,
-      updatedAt: nowIso()
-    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static renameNode(workspace: Workspace, nodeId: string, label: string): Workspace {
@@ -58,24 +175,47 @@ export class GraphService {
     }
 
     const lowerLabel: string = trimmedLabel.toLowerCase()
-    const conflict: WordNode | undefined = layer.nodes.find(
-      (n: WordNode) => n.id !== nodeId && n.label.toLowerCase() === lowerLabel
-    )
-    if (conflict) {
+    let conflictFound: boolean = false
+    for (const n of layer.nodes) {
+      if (n.id !== nodeId && n.label.toLowerCase() === lowerLabel) {
+        conflictFound = true
+        break
+      }
+    }
+    if (conflictFound) {
       return workspace
     }
 
-    const updatedNodes: WordNode[] = layer.nodes.map((n: WordNode) => {
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
       if (n.id === nodeId) {
-        return { ...n, label: trimmedLabel, updatedAt: nowIso() } as WordNode
+        updatedNodes.push({
+          id: n.id,
+          label: trimmedLabel,
+          x: n.x,
+          y: n.y,
+          note: n.note,
+          style: n.style,
+          createdAt: n.createdAt,
+          updatedAt: nowIso()
+        })
+      } else {
+        updatedNodes.push(n)
       }
-      return n
-    })
-    const updatedLayer: Layer = { ...layer, nodes: updatedNodes, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    }
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static deleteNodes(workspace: Workspace, nodeIds: string[]): Workspace {
@@ -85,22 +225,32 @@ export class GraphService {
     }
 
     const idSet: Set<string> = new Set<string>(nodeIds)
-    const filteredNodes: WordNode[] = layer.nodes.filter(
-      (n: WordNode) => !idSet.has(n.id)
-    )
-    const filteredEdges: WordEdge[] = layer.edges.filter(
-      (e: WordEdge) => !idSet.has(e.source) && !idSet.has(e.target)
-    )
+    const filteredNodes: WordNode[] = []
+    for (const n of layer.nodes) {
+      if (!idSet.has(n.id)) {
+        filteredNodes.push(n)
+      }
+    }
+
+    const filteredEdges: WordEdge[] = []
+    for (const e of layer.edges) {
+      if (!idSet.has(e.source) && !idSet.has(e.target)) {
+        filteredEdges.push(e)
+      }
+    }
+
     const updatedLayer: Layer = {
-      ...layer,
+      id: layer.id,
+      name: layer.name,
       nodes: filteredNodes,
       edges: filteredEdges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
       updatedAt: nowIso()
     }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static updateNodePosition(workspace: Workspace, nodeId: string, x: number, y: number): Workspace {
@@ -109,17 +259,36 @@ export class GraphService {
       return workspace
     }
 
-    const updatedNodes: WordNode[] = layer.nodes.map((n: WordNode) => {
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
       if (n.id === nodeId) {
-        return { ...n, x: x, y: y, updatedAt: nowIso() } as WordNode
+        updatedNodes.push({
+          id: n.id,
+          label: n.label,
+          x: x,
+          y: y,
+          note: n.note,
+          style: n.style,
+          createdAt: n.createdAt,
+          updatedAt: nowIso()
+        })
+      } else {
+        updatedNodes.push(n)
       }
-      return n
-    })
-    const updatedLayer: Layer = { ...layer, nodes: updatedNodes, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    }
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static moveNodes(workspace: Workspace, nodeIds: string[], deltaX: number, deltaY: number): Workspace {
@@ -129,17 +298,36 @@ export class GraphService {
     }
 
     const idSet: Set<string> = new Set<string>(nodeIds)
-    const updatedNodes: WordNode[] = layer.nodes.map((n: WordNode) => {
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
       if (idSet.has(n.id)) {
-        return { ...n, x: n.x + deltaX, y: n.y + deltaY, updatedAt: nowIso() } as WordNode
+        updatedNodes.push({
+          id: n.id,
+          label: n.label,
+          x: n.x + deltaX,
+          y: n.y + deltaY,
+          note: n.note,
+          style: n.style,
+          createdAt: n.createdAt,
+          updatedAt: nowIso()
+        })
+      } else {
+        updatedNodes.push(n)
       }
-      return n
-    })
-    const updatedLayer: Layer = { ...layer, nodes: updatedNodes, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    }
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static updateNodeNote(workspace: Workspace, nodeId: string, note: string): Workspace {
@@ -148,17 +336,36 @@ export class GraphService {
       return workspace
     }
 
-    const updatedNodes: WordNode[] = layer.nodes.map((n: WordNode) => {
+    const updatedNodes: WordNode[] = []
+    for (const n of layer.nodes) {
       if (n.id === nodeId) {
-        return { ...n, note: note, updatedAt: nowIso() } as WordNode
+        updatedNodes.push({
+          id: n.id,
+          label: n.label,
+          x: n.x,
+          y: n.y,
+          note: note,
+          style: n.style,
+          createdAt: n.createdAt,
+          updatedAt: nowIso()
+        })
+      } else {
+        updatedNodes.push(n)
       }
-      return n
-    })
-    const updatedLayer: Layer = { ...layer, nodes: updatedNodes, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    }
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static connectNodes(workspace: Workspace, sourceId: string, targetId: string): Workspace {
@@ -172,26 +379,50 @@ export class GraphService {
     }
 
     const key: string = makeEdgeKey(sourceId, targetId)
-    const exists: boolean = layer.edges.some(
-      (e: WordEdge) => makeEdgeKey(e.source, e.target) === key
-    )
+    let exists: boolean = false
+    for (const e of layer.edges) {
+      if (makeEdgeKey(e.source, e.target) === key) {
+        exists = true
+        break
+      }
+    }
     if (exists) {
       return workspace
     }
 
-    const sourceExists: boolean = layer.nodes.some((n: WordNode) => n.id === sourceId)
-    const targetExists: boolean = layer.nodes.some((n: WordNode) => n.id === targetId)
+    let sourceExists: boolean = false
+    let targetExists: boolean = false
+    for (const n of layer.nodes) {
+      if (n.id === sourceId) {
+        sourceExists = true
+      }
+      if (n.id === targetId) {
+        targetExists = true
+      }
+    }
     if (!sourceExists || !targetExists) {
       return workspace
     }
 
     const newEdge: WordEdge = createEdge(sourceId, targetId)
-    const updatedEdges: WordEdge[] = [...layer.edges, newEdge]
-    const updatedLayer: Layer = { ...layer, edges: updatedEdges, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    const updatedEdges: WordEdge[] = []
+    for (const e of layer.edges) {
+      updatedEdges.push(e)
+    }
+    updatedEdges.push(newEdge)
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: layer.nodes,
+      edges: updatedEdges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static disconnectNodes(workspace: Workspace, sourceId: string, targetId: string): Workspace {
@@ -201,14 +432,25 @@ export class GraphService {
     }
 
     const key: string = makeEdgeKey(sourceId, targetId)
-    const filteredEdges: WordEdge[] = layer.edges.filter(
-      (e: WordEdge) => makeEdgeKey(e.source, e.target) !== key
-    )
-    const updatedLayer: Layer = { ...layer, edges: filteredEdges, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
+    const filteredEdges: WordEdge[] = []
+    for (const e of layer.edges) {
+      if (makeEdgeKey(e.source, e.target) !== key) {
+        filteredEdges.push(e)
+      }
+    }
+
+    const updatedLayer: Layer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: layer.nodes,
+      edges: filteredEdges,
+      viewport: layer.viewport,
+      createdAt: layer.createdAt,
+      updatedAt: nowIso()
+    }
+
+    const updatedLayers: Layer[] = buildUpdatedLayers(workspace.layers, layer.id, updatedLayer)
+    return buildUpdatedWorkspace(workspace, updatedLayers, { updatedAt: nowIso() })
   }
 
   static connectAllSelected(workspace: Workspace, nodeIds: string[]): Workspace {
@@ -227,8 +469,8 @@ export class GraphService {
     }
 
     const newEdges: WordEdge[] = []
-    for (let i = 0; i < nodeIds.length; i++) {
-      for (let j = i + 1; j < nodeIds.length; j++) {
+    for (let i: number = 0; i < nodeIds.length; i++) {
+      for (let j: number = i + 1; j < nodeIds.length; j++) {
         const key: string = makeEdgeKey(nodeIds[i], nodeIds[j])
         if (!existingKeys.has(key)) {
           newEdges.push(createEdge(nodeIds[i], nodeIds[j]))
@@ -241,161 +483,6 @@ export class GraphService {
       return workspace
     }
 
-    const updatedEdges: WordEdge[] = [...layer.edges, ...newEdges]
-    const updatedLayer: Layer = { ...layer, edges: updatedEdges, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
-  }
-
-  static disconnectSelected(workspace: Workspace, nodeIds: string[]): Workspace {
-    const layer: Layer | undefined = GraphService.getActiveLayer(workspace)
-    if (!layer) {
-      return workspace
-    }
-
-    const idSet: Set<string> = new Set<string>(nodeIds)
-    const filteredEdges: WordEdge[] = layer.edges.filter(
-      (e: WordEdge) => !(idSet.has(e.source) && idSet.has(e.target))
-    )
-    const updatedLayer: Layer = { ...layer, edges: filteredEdges, updatedAt: nowIso() }
-    const updatedLayers: Layer[] = workspace.layers.map(
-      (l: Layer) => l.id === layer.id ? updatedLayer : l
-    )
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
-  }
-
-  static createLayer(workspace: Workspace): Workspace {
-    const layerCount: number = workspace.layers.length
-    const newName: string = `图层 ${layerCount + 1}`
-    const newLayer: Layer = createLayer(newName)
-    const updatedLayers: Layer[] = [...workspace.layers, newLayer]
-    return {
-      ...workspace,
-      layers: updatedLayers,
-      activeLayerId: newLayer.id,
-      updatedAt: nowIso()
-    }
-  }
-
-  static switchLayer(workspace: Workspace, layerId: string): Workspace {
-    const target: Layer | undefined = workspace.layers.find((l: Layer) => l.id === layerId)
-    if (!target) {
-      return workspace
-    }
-    return { ...workspace, activeLayerId: layerId, updatedAt: nowIso() }
-  }
-
-  static renameActiveLayer(workspace: Workspace, name: string): Workspace {
-    const trimmedName: string = name.trim()
-    if (trimmedName.length === 0) {
-      return workspace
-    }
-
-    const updatedLayers: Layer[] = workspace.layers.map((l: Layer) => {
-      if (l.id === workspace.activeLayerId) {
-        return { ...l, name: trimmedName, updatedAt: nowIso() } as Layer
-      }
-      return l
-    })
-    return { ...workspace, layers: updatedLayers, updatedAt: nowIso() }
-  }
-
-  static copyActiveLayer(workspace: Workspace): Workspace {
-    const source: Layer | undefined = GraphService.getActiveLayer(workspace)
-    if (!source) {
-      return workspace
-    }
-
-    const nodeIdMap: Map<string, string> = new Map<string, string>()
-    const now: string = nowIso()
-
-    const newNodes: WordNode[] = source.nodes.map((n: WordNode) => {
-      const newId: string = generateId('node')
-      nodeIdMap.set(n.id, newId)
-      return {
-        ...n,
-        id: newId,
-        createdAt: now,
-        updatedAt: now
-      } as WordNode
-    })
-
-    const newEdges: WordEdge[] = source.edges.map((e: WordEdge) => {
-      const newSource: string = nodeIdMap.get(e.source) ?? e.source
-      const newTarget: string = nodeIdMap.get(e.target) ?? e.target
-      return {
-        ...e,
-        id: generateId('edge'),
-        source: newSource,
-        target: newTarget,
-        createdAt: now,
-        updatedAt: now
-      } as WordEdge
-    })
-
-    const newLayer: Layer = {
-      id: generateId('layer'),
-      name: `${source.name} 副本`,
-      nodes: newNodes,
-      edges: newEdges,
-      viewport: { ...source.viewport },
-      createdAt: now,
-      updatedAt: now
-    }
-
-    const updatedLayers: Layer[] = [...workspace.layers, newLayer]
-    return {
-      ...workspace,
-      layers: updatedLayers,
-      activeLayerId: newLayer.id,
-      updatedAt: nowIso()
-    }
-  }
-
-  static searchCurrentLayer(workspace: Workspace, keyword: string): SearchResult[] {
-    const layer: Layer | undefined = GraphService.getActiveLayer(workspace)
-    if (!layer || keyword.trim().length === 0) {
-      return []
-    }
-
-    const lowerKeyword: string = keyword.trim().toLowerCase()
-    const results: SearchResult[] = []
-
-    for (const node of layer.nodes) {
-      const lowerLabel: string = node.label.toLowerCase()
-      let score: number = 0
-
-      if (lowerLabel === lowerKeyword) {
-        score = 100
-      } else if (lowerLabel.startsWith(lowerKeyword)) {
-        score = 80
-      } else if (lowerLabel.includes(lowerKeyword)) {
-        score = 60
-      }
-
-      if (score > 0) {
-        results.push({
-          nodeId: node.id,
-          label: node.label,
-          layerId: layer.id,
-          score: score
-        })
-      }
-    }
-
-    results.sort((a: SearchResult, b: SearchResult) => b.score - a.score)
-    return results
-  }
-
-  static updateActiveViewport(workspace: Workspace, x: number, y: number, zoom: number): Workspace {
-    const updatedLayers: Layer[] = workspace.layers.map((l: Layer) => {
-      if (l.id === workspace.activeLayerId) {
-        return { ...l, viewport: { x: x, y: y, zoom: zoom } } as Layer
-      }
-      return l
-    })
-    return { ...workspace, layers: updatedLayers }
-  }
-}
+    const updatedEdges: WordEdge[] = []
+    for (const e of layer.edges) {
+      upd

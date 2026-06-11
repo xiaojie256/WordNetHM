@@ -16,22 +16,27 @@ export const ZOOM_STEP: number = 0.15
 
 export const LARGE_CONNECTION_CONFIRM_THRESHOLD: number = 45
 
-export const COLORS: Record<string, string> = {
+export interface ColorScheme {
+  pageBg: string
+  panelBg: string
+  panelBorder: string
+  textPrimary: string
+  textSecondary: string
+  primary: string
+  primaryLight: string
+  danger: string
+  warning: string
+  nodeBg: string
+  nodeBorder: string
+  nodeSelectedBorder: string
+  nodeHighlightedBorder: string
+  edge: string
+  edgeSelected: string
+  selectionFill: string
+  selectionStroke: string
+}
+
+export const COLORS: ColorScheme = {
   pageBg: '#F8FAFC',
   panelBg: '#FFFFFF',
-  panelBorder: '#E2E8F0',
-  textPrimary: '#0F172A',
-  textSecondary: '#64748B',
-  primary: '#2563EB',
-  primaryLight: '#DBEAFE',
-  danger: '#DC2626',
-  warning: '#F59E0B',
-  nodeBg: '#FFFFFF',
-  nodeBorder: '#CBD5E1',
-  nodeSelectedBorder: '#2563EB',
-  nodeHighlightedBorder: '#F59E0B',
-  edge: '#94A3B8',
-  edgeSelected: '#2563EB',
-  selectionFill: '#3B82F633',
-  selectionStroke: '#2563EB'
-}
+  pan

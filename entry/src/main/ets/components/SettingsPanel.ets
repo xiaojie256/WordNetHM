@@ -30,6 +30,17 @@ export struct SettingsPanel {
     })
   }
 
+  private buildSettings(autoSave: boolean, showGrid: boolean): WordNetSettings {
+    const result: WordNetSettings = {
+      autoSave: autoSave,
+      showGrid: showGrid,
+      defaultZoom: this.settings.defaultZoom,
+      confirmBeforeDelete: this.settings.confirmBeforeDelete,
+      confirmBeforeClear: this.settings.confirmBeforeClear
+    }
+    return result
+  }
+
   build() {
     Column() {
       Row() {
@@ -62,11 +73,7 @@ export struct SettingsPanel {
 
         Toggle({ type: ToggleType.Switch, isOn: this.settings.autoSave })
           .onChange((isOn: boolean) => {
-            const updated: WordNetSettings = {
-              ...this.settings,
-              autoSave: isOn
-            }
-            this.onUpdateSettings(updated)
+            this.onUpdateSettings(this.buildSettings(isOn, this.settings.showGrid))
           })
       }
       .width('100%')
@@ -81,11 +88,7 @@ export struct SettingsPanel {
 
         Toggle({ type: ToggleType.Switch, isOn: this.settings.showGrid })
           .onChange((isOn: boolean) => {
-            const updated: WordNetSettings = {
-              ...this.settings,
-              showGrid: isOn
-            }
-            this.onUpdateSettings(updated)
+            this.onUpdateSettings(this.buildSettings(this.settings.autoSave, isOn))
           })
       }
       .width('100%')
@@ -100,14 +103,4 @@ export struct SettingsPanel {
         .width('100%')
         .height(40)
         .fontSize(14)
-        .borderRadius(8)
-        .backgroundColor('#FEE2E2')
-        .fontColor(COLORS.danger)
-        .onClick(() => {
-          this.showClearConfirm()
-        })
-    }
-    .width('100%')
-    .padding(16)
-  }
-}
+        

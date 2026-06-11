@@ -58,7 +58,7 @@ struct Index {
 
   private async initWorkspace(): Promise<void> {
     try {
-      const context = getContext(this) as common.UIAbilityContext
+      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext
       const saved: Workspace | undefined = await StorageService.loadWorkspace(context)
       if (saved) {
         const ensured: Workspace = ensureWorkspace(saved)
@@ -69,8 +69,8 @@ struct Index {
         this.workspace = defaultWs
         this.activeLayerId = defaultWs.activeLayerId
       }
-    } catch (err) {
-      console.error(`[Index] initWorkspace failed: ${err}`)
+    } catch (err: Error) {
+      console.error('[Index] initWorkspace failed: ' + err.message)
       const defaultWs: Workspace = createDefaultWorkspace()
       this.workspace = defaultWs
       this.activeLayerId = defaultWs.activeLayerId
@@ -80,13 +80,13 @@ struct Index {
   private async saveWorkspace(showToastFlag: boolean = false): Promise<void> {
     this.saveStatus = 'saving'
     try {
-      const context = getContext(this) as common.UIAbilityContext
+      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext
       await StorageService.saveWorkspace(context, this.workspace)
       this.saveStatus = 'saved'
       if (showToastFlag) {
         showToast('保存成功')
       }
-    } catch (err) {
+    } catch (err: Error) {
       this.saveStatus = 'failed'
       showToast('保存失败，请导出 JSON 备份')
     }
@@ -102,7 +102,7 @@ struct Index {
     this.autoSaveTimer = setTimeout(() => {
       this.saveWorkspace(false)
       this.autoSaveTimer = -1
-    }, AUTO_SAVE_DELAY_MS) as unknown as number
+    }, AUTO_SAVE_DELAY_MS) as number
   }
 
   private setWorkspace(next: Workspace): void {
@@ -159,7 +159,7 @@ struct Index {
       const count: number = this.selectedNodeIds.length
       promptAction.showDialog({
         title: '确认删除',
-        message: `确定删除选中的 ${count} 个节点吗？这些节点相关的连接也会被删除。`,
+        message: '确定删除选中的 ' + count + ' 个节点吗？这些节点相关的连接也会被删除。',
         buttons: [
           { text: '取消', color: COLORS.textSecondary },
           { text: '删除', color: COLORS.danger }
@@ -258,7 +258,7 @@ struct Index {
     if (newConnectionCount > LARGE_CONNECTION_CONFIRM_THRESHOLD) {
       promptAction.showDialog({
         title: '确认连接',
-        message: `即将创建 ${newConnectionCount} 条连接，是否继续？`,
+        message: '即将创建 ' + newConnectionCount + ' 条连接，是否继续？',
         buttons: [
           { text: '取消', color: COLORS.textSecondary },
           { text: '确认', color: COLORS.primary }
@@ -312,7 +312,13 @@ struct Index {
       return
     }
 
-    const node: WordNode | undefined = layer.nodes.find((n: WordNode) => n.id === nodeId)
+    let node: WordNode | undefined = undefined
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        node = n
+        break
+      }
+    }
     if (!node) {
       return
     }
@@ -329,7 +335,7 @@ struct Index {
     this.highlightTimer = setTimeout(() => {
       this.highlightedNodeId = ''
       this.highlightTimer = -1
-    }, 1500) as unknown as number
+    }, 1500) as number
 
     this.selectedNodeIds = [nodeId]
   }
@@ -385,8 +391,8 @@ struct Index {
       this.isJsonDialogVisible = false
       this.saveWorkspace(false)
       showToast('导入成功')
-    } catch (err) {
-      showToast(`导入失败: ${err}`)
+    } catch (err: Error) {
+      showToast('导入失败: ' + err.message)
     }
   }
 
@@ -397,7 +403,15 @@ struct Index {
   }
 
   private onUpdateSettings(settings: WordNetSettings): void {
-    const next: Workspace = { ...this.workspace, settings: settings }
+    const next: Workspace = {
+      version: this.workspace.version,
+      appName: this.workspace.appName,
+      activeLayerId: this.workspace.activeLayerId,
+      layers: this.workspace.layers,
+      settings: settings,
+      createdAt: this.workspace.createdAt,
+      updatedAt: this.workspace.updatedAt
+    }
     this.setWorkspace(next)
   }
 
@@ -410,11 +424,10 @@ struct Index {
     if (this.selectedNodeIds.length === 1) {
       const layer: Layer | undefined = this.getActiveLayer()
       if (layer) {
-        const node: WordNode | undefined = layer.nodes.find(
-          (n: WordNode) => n.id === this.selectedNodeIds[0]
-        )
-        if (node) {
-          return node.label
+        for (const n of layer.nodes) {
+          if (n.id === this.selectedNodeIds[0]) {
+            return n.label
+          }
         }
       }
     }
@@ -425,11 +438,10 @@ struct Index {
     if (this.selectedNodeIds.length === 1) {
       const layer: Layer | undefined = this.getActiveLayer()
       if (layer) {
-        const node: WordNode | undefined = layer.nodes.find(
-          (n: WordNode) => n.id === this.selectedNodeIds[0]
-        )
-        if (node) {
-          return node.note
+        for (const n of layer.nodes) {
+          if (n.id === this.selectedNodeIds[0]) {
+            return n.note
+          }
         }
       }
     }
@@ -440,267 +452,307 @@ struct Index {
     return this.screenWidth >= 840
   }
 
-  build() {
+  private getNodeLabels(): string[] {
+    const layer: Layer | undefined = this.getActiveLayer()
+    if (!layer) {
+      return []
+    }
+    const labels: string[] = []
+    for (const n of layer.nodes) {
+      labels.push(n.label)
+    }
+    return labels
+  }
+
+  private getNodeIds(): string[] {
+    const layer: Layer | undefined = this.getActiveLayer()
+    if (!layer) {
+      return []
+    }
+    const ids: string[] = []
+    for (const n of layer.nodes) {
+      ids.push(n.id)
+    }
+    return ids
+  }
+
+  private getLayerNames(): string[] {
+    const names: string[] = []
+    for (const l of this.workspace.layers) {
+      names.push(l.name)
+    }
+    return names
+  }
+
+  private getLayerIds(): string[] {
+    const ids: string[] = []
+    for (const l of this.workspace.layers) {
+      ids.push(l.id)
+    }
+    return ids
+  }
+
+  @Builder
+  buildLargeScreenSidePanel() {
     Column() {
-      TopBar({
-        saveStatus: this.saveStatus,
-        onImport: () => { this.onOpenImportDialog() },
-        onSave: () => { this.saveWorkspace(true) },
-        onExport: () => { this.onOpenExportDialog() },
-        onOpenSettings: () => { this.isSettingsVisible = true }
-      })
-
-      if (this.isLargeScreen()) {
-        Row() {
-          GraphCanvas({
-            workspace: this.workspace,
+      Tabs({ barPosition: BarPosition.Start }) {
+        TabContent() {
+          LayerPanel({
+            layerNames: this.getLayerNames(),
+            layerIds: this.getLayerIds(),
             activeLayerId: this.activeLayerId,
-            selectedNodeIds: this.selectedNodeIds,
-            highlightedNodeId: this.highlightedNodeId,
-            connectingFromNodeId: this.connectingFromNodeId,
-            showGrid: this.workspace.settings.showGrid,
-            onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
-            onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
-            onClearSelection: () => { this.onClearSelection() },
-            onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
-            onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
-            onViewportChange: (x: number, y: number, zoom: number) => {
-              const next = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
-              this.setWorkspace(next)
-            },
-            onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
-            onCanvasReady: (w: number, h: number) => {
-              this.canvasWidth = w
-              this.canvasHeight = h
-            }
+            onCreateLayer: () => { this.onCreateLayer() },
+            onCopyLayer: () => { this.onCopyLayer() },
+            onRenameLayer: (name: string) => { this.onRenameLayer(name) },
+            onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
           })
-          .layoutWeight(1)
-
-          Column() {
-            Tabs({ barPosition: BarPosition.Start }) {
-              TabContent() {
-                LayerPanel({
-                  layerNames: this.workspace.layers.map((l: Layer) => l.name),
-                  layerIds: this.workspace.layers.map((l: Layer) => l.id),
-                  activeLayerId: this.activeLayerId,
-                  onCreateLayer: () => { this.onCreateLayer() },
-                  onCopyLayer: () => { this.onCopyLayer() },
-                  onRenameLayer: (name: string) => { this.onRenameLayer(name) },
-                  onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
-                })
-              }
-              .tabBar({ builder: () => { Text('图层').fontSize(13).padding(8) } })
-
-              TabContent() {
-                AddNodePanel({
-                  onAddNode: (label: string) => { this.onAddNode(label) }
-                })
-              }
-              .tabBar({ builder: () => { Text('添加').fontSize(13).padding(8) } })
-
-              TabContent() {
-                Column() {
-                  SearchPanel({
-                    onSearch: (keyword: string) => { return this.onSearch(keyword) },
-                    onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
-                  })
-
-                  Divider().margin({ top: 4, bottom: 4 })
-
-                  QuickConnectPanel({
-                    nodeLabels: this.getActiveLayer()?.nodes.map((n: WordNode) => n.label) ?? [],
-                    nodeIds: this.getActiveLayer()?.nodes.map((n: WordNode) => n.id) ?? [],
-                    onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
-                    onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
-                  })
-                }
-              }
-              .tabBar({ builder: () => { Text('搜索').fontSize(13).padding(8) } })
-
-              TabContent() {
-                NodeNotePanel({
-                  selectedNodeIds: this.selectedNodeIds,
-                  selectedNodeLabel: this.getSelectedNodeLabel(),
-                  nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
-                  onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
-                  onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
-                  onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
-                  onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
-                })
-              }
-              .tabBar({ builder: () => { Text('注释').fontSize(13).padding(8) } })
-            }
-            .barWidth(340)
-            .barHeight(40)
-            .scrollable(true)
-            .animationDuration(0)
-          }
-          .width(340)
-          .height('100%')
-          .backgroundColor(COLORS.panelBg)
-          .border({ width: { left: 1 }, color: COLORS.panelBorder })
         }
-        .layoutWeight(1)
-      } else {
-        Column() {
-          GraphCanvas({
-            workspace: this.workspace,
-            activeLayerId: this.activeLayerId,
-            selectedNodeIds: this.selectedNodeIds,
-            highlightedNodeId: this.highlightedNodeId,
-            connectingFromNodeId: this.connectingFromNodeId,
-            showGrid: this.workspace.settings.showGrid,
-            onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
-            onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
-            onClearSelection: () => { this.onClearSelection() },
-            onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
-            onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
-            onViewportChange: (x: number, y: number, zoom: number) => {
-              const next = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
-              this.setWorkspace(next)
-            },
-            onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
-            onCanvasReady: (w: number, h: number) => {
-              this.canvasWidth = w
-              this.canvasHeight = h
-            }
+        .tabBar('图层')
+
+        TabContent() {
+          AddNodePanel({
+            onAddNode: (label: string) => { this.onAddNode(label) }
           })
-          .layoutWeight(1)
+        }
+        .tabBar('添加')
 
+        TabContent() {
           Column() {
-            Tabs({ barPosition: BarPosition.Start }) {
-              TabContent() {
-                LayerPanel({
-                  layerNames: this.workspace.layers.map((l: Layer) => l.name),
-                  layerIds: this.workspace.layers.map((l: Layer) => l.id),
-                  activeLayerId: this.activeLayerId,
-                  onCreateLayer: () => { this.onCreateLayer() },
-                  onCopyLayer: () => { this.onCopyLayer() },
-                  onRenameLayer: (name: string) => { this.onRenameLayer(name) },
-                  onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
-                })
+            SearchPanel({
+              onSearch: (keyword: string): SearchResult[] => { return this.onSearch(keyword) },
+              onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
+            })
+
+            Divider().margin({ top: 4, bottom: 4 })
+
+            QuickConnectPanel({
+              nodeLabels: this.getNodeLabels(),
+              nodeIds: this.getNodeIds(),
+              onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
+              onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
+            })
+          }
+        }
+        .tabBar('搜索')
+
+        TabContent() {
+          NodeNotePanel({
+            selectedNodeIds: this.selectedNodeIds,
+            selectedNodeLabel: this.getSelectedNodeLabel(),
+            nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
+            onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
+            onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
+            onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
+            onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
+          })
+        }
+        .tabBar('注释')
+      }
+      .barHeight(40)
+      .scrollable(true)
+      .animationDuration(0)
+    }
+    .width(340)
+    .height('100%')
+    .backgroundColor(COLORS.panelBg)
+    .border({ width: { left: 1 }, color: COLORS.panelBorder })
+  }
+
+  @Builder
+  buildMobileSidePanel() {
+    Column() {
+      Tabs({ barPosition: BarPosition.Start }) {
+        TabContent() {
+          LayerPanel({
+            layerNames: this.getLayerNames(),
+            layerIds: this.getLayerIds(),
+            activeLayerId: this.activeLayerId,
+            onCreateLayer: () => { this.onCreateLayer() },
+            onCopyLayer: () => { this.onCopyLayer() },
+            onRenameLayer: (name: string) => { this.onRenameLayer(name) },
+            onSwitchLayer: (layerId: string) => { this.onSwitchLayer(layerId) }
+          })
+        }
+        .tabBar('图层')
+
+        TabContent() {
+          AddNodePanel({
+            onAddNode: (label: string) => { this.onAddNode(label) }
+          })
+        }
+        .tabBar('添加')
+
+        TabContent() {
+          Column() {
+            SearchPanel({
+              onSearch: (keyword: string): SearchResult[] => { return this.onSearch(keyword) },
+              onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
+            })
+
+            Divider().margin({ top: 4, bottom: 4 })
+
+            QuickConnectPanel({
+              nodeLabels: this.getNodeLabels(),
+              nodeIds: this.getNodeIds(),
+              onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
+              onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
+            })
+          }
+        }
+        .tabBar('搜索')
+
+        TabContent() {
+          NodeNotePanel({
+            selectedNodeIds: this.selectedNodeIds,
+            selectedNodeLabel: this.getSelectedNodeLabel(),
+            nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
+            onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
+            onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
+            onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
+            onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
+          })
+        }
+        .tabBar('注释')
+      }
+      .barHeight(36)
+      .scrollable(true)
+      .animationDuration(0)
+    }
+    .width('100%')
+    .height(240)
+    .backgroundColor(COLORS.panelBg)
+    .border({ width: { top: 1 }, color: COLORS.panelBorder })
+  }
+
+  build() {
+    Stack() {
+      Column() {
+        TopBar({
+          saveStatus: this.saveStatus,
+          onImport: () => { this.onOpenImportDialog() },
+          onSave: () => { this.saveWorkspace(true) },
+          onExport: () => { this.onOpenExportDialog() },
+          onOpenSettings: () => { this.isSettingsVisible = true }
+        })
+
+        if (this.isLargeScreen()) {
+          Row() {
+            GraphCanvas({
+              workspace: this.workspace,
+              activeLayerId: this.activeLayerId,
+              selectedNodeIds: this.selectedNodeIds,
+              highlightedNodeId: this.highlightedNodeId,
+              connectingFromNodeId: this.connectingFromNodeId,
+              showGrid: this.workspace.settings.showGrid,
+              onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
+              onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
+              onClearSelection: () => { this.onClearSelection() },
+              onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
+              onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
+              onViewportChange: (x: number, y: number, zoom: number) => {
+                const next: Workspace = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
+                this.setWorkspace(next)
+              },
+              onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
+              onCanvasReady: (w: number, h: number) => {
+                this.canvasWidth = w
+                this.canvasHeight = h
               }
-              .tabBar({ builder: () => { Text('图层').fontSize(12).padding(6) } })
+            })
+            .layoutWeight(1)
 
-              TabContent() {
-                AddNodePanel({
-                  onAddNode: (label: string) => { this.onAddNode(label) }
-                })
+            this.buildLargeScreenSidePanel()
+          }
+          .layoutWeight(1)
+        } else {
+          Column() {
+            GraphCanvas({
+              workspace: this.workspace,
+              activeLayerId: this.activeLayerId,
+              selectedNodeIds: this.selectedNodeIds,
+              highlightedNodeId: this.highlightedNodeId,
+              connectingFromNodeId: this.connectingFromNodeId,
+              showGrid: this.workspace.settings.showGrid,
+              onSelectSingle: (nodeId: string) => { this.onSelectSingle(nodeId) },
+              onSelectMultiple: (nodeIds: string[]) => { this.onSelectMultiple(nodeIds) },
+              onClearSelection: () => { this.onClearSelection() },
+              onNodePositionChange: (nodeId: string, x: number, y: number) => { this.onNodePositionChange(nodeId, x, y) },
+              onMoveSelectedNodes: (dx: number, dy: number) => { this.onMoveSelectedNodes(dx, dy) },
+              onViewportChange: (x: number, y: number, zoom: number) => {
+                const next: Workspace = GraphService.updateActiveViewport(this.workspace, x, y, zoom)
+                this.setWorkspace(next)
+              },
+              onCompleteConnect: (nodeId: string) => { this.onCompleteConnect(nodeId) },
+              onCanvasReady: (w: number, h: number) => {
+                this.canvasWidth = w
+                this.canvasHeight = h
               }
-              .tabBar({ builder: () => { Text('添加').fontSize(12).padding(6) } })
+            })
+            .layoutWeight(1)
 
-              TabContent() {
-                Column() {
-                  SearchPanel({
-                    onSearch: (keyword: string) => { return this.onSearch(keyword) },
-                    onLocateNode: (nodeId: string) => { this.onLocateNode(nodeId) }
-                  })
-
-                  Divider().margin({ top: 4, bottom: 4 })
-
-                  QuickConnectPanel({
-                    nodeLabels: this.getActiveLayer()?.nodes.map((n: WordNode) => n.label) ?? [],
-                    nodeIds: this.getActiveLayer()?.nodes.map((n: WordNode) => n.id) ?? [],
-                    onConnect: (sourceId: string, targetId: string) => { this.onConnectNodes(sourceId, targetId) },
-                    onDisconnect: (sourceId: string, targetId: string) => { this.onDisconnectNodes(sourceId, targetId) }
-                  })
-                }
-              }
-              .tabBar({ builder: () => { Text('搜索').fontSize(12).padding(6) } })
-
-              TabContent() {
-                NodeNotePanel({
-                  selectedNodeIds: this.selectedNodeIds,
-                  selectedNodeLabel: this.getSelectedNodeLabel(),
-                  nodeId: this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : '',
-                  onUpdateNote: (nodeId: string, note: string) => { this.onUpdateNodeNote(nodeId, note) },
-                  onRenameNode: (nodeId: string, label: string) => { this.onRenameNode(nodeId, label) },
-                  onStartConnect: (nodeId: string) => { this.onStartConnect(nodeId) },
-                  onDeleteNode: (nodeId: string) => { this.onDeleteSingleNode(nodeId) }
-                })
-              }
-              .tabBar({ builder: () => { Text('注释').fontSize(12).padding(6) } })
-            }
-            .barHeight(36)
-            .scrollable(true)
-            .animationDuration(0)
+            this.buildMobileSidePanel()
           }
           .width('100%')
-          .height(240)
+          .height('100%')
+        }
+
+        if (this.selectedNodeIds.length > 1) {
+          SelectionBar({
+            selectedCount: this.selectedNodeIds.length,
+            onConnectAll: () => { this.onConnectSelectedAll() },
+            onDisconnectSelected: () => { this.onDisconnectSelected() },
+            onDeleteSelected: () => { this.onDeleteSelected() },
+            onCancel: () => { this.onClearSelection() }
+          })
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(COLORS.pageBg)
+      .onAreaChange((_oldVal: Area, newVal: Area) => {
+        this.screenWidth = newVal.width as number
+      })
+
+      if (this.isSettingsVisible) {
+        Column() {
+          Column() {
+            SettingsPanel({
+              settings: this.workspace.settings,
+              onUpdateSettings: (settings: WordNetSettings) => { this.onUpdateSettings(settings) },
+              onClearAllData: () => { this.onClearAllData() },
+              onClose: () => { this.isSettingsVisible = false }
+            })
+          }
+          .width(this.isLargeScreen() ? 380 : '90%')
+          .constraintSize({ maxHeight: '80%' })
           .backgroundColor(COLORS.panelBg)
-          .border({ width: { top: 1 }, color: COLORS.panelBorder })
+          .borderRadius(12)
+          .shadow({ radius: 12, color: '#33000000' })
         }
         .width('100%')
         .height('100%')
-      }
-
-      if (this.selectedNodeIds.length > 1) {
-        SelectionBar({
-          selectedCount: this.selectedNodeIds.length,
-          onConnectAll: () => { this.onConnectSelectedAll() },
-          onDisconnectSelected: () => { this.onDisconnectSelected() },
-          onDeleteSelected: () => { this.onDeleteSelected() },
-          onCancel: () => { this.onClearSelection() }
+        .backgroundColor('#33000000')
+        .justifyContent(FlexAlign.Center)
+        .position({ x: 0, y: 0 })
+        .onClick(() => {
+          this.isSettingsVisible = false
         })
       }
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(COLORS.pageBg)
-    .onAreaChange((_oldVal: Area, newVal: Area) => {
-      this.screenWidth = newVal.width as number
-    })
 
-    if (this.isSettingsVisible) {
-      Column() {
+      if (this.isJsonDialogVisible) {
         Column() {
-          SettingsPanel({
-            settings: this.workspace.settings,
-            onUpdateSettings: (settings: WordNetSettings) => { this.onUpdateSettings(settings) },
-            onClearAllData: () => { this.onClearAllData() },
-            onClose: () => { this.isSettingsVisible = false }
-          })
+          Column() {
+            JsonDialog({
+              mode: this.jsonDialogMode,
+              jsonText: this.jsonDialogText,
+              onImport: (jsonText: string) => { this.onImportJson(jsonText) },
+              onClose: () => { this.isJsonDialogVisible = false }
+            })
+          }
+          .width(this.isLargeScreen() ? 480 : '95%')
+          .constraintSize({ maxHeight: '85%' })
+          .backgroundColor(COLORS.panelBg)
+          .borderRadius(12)
+          .shadow({ radius: 12, color: '#33000000' })
         }
-        .width(this.isLargeScreen() ? 380 : '90%')
-        .maxHeight('80%')
-        .backgroundColor(COLORS.panelBg)
-        .borderRadius(12)
-        .shadow({ radius: 12, color: '#33000000' })
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor('#33000000')
-      .justifyContent(FlexAlign.Center)
-      .position({ x: 0, y: 0 })
-      .onClick(() => {
-        this.isSettingsVisible = false
-      })
-    }
-
-    if (this.isJsonDialogVisible) {
-      Column() {
-        Column() {
-          JsonDialog({
-            mode: this.jsonDialogMode,
-            jsonText: this.jsonDialogText,
-            onImport: (jsonText: string) => { this.onImportJson(jsonText) },
-            onClose: () => { this.isJsonDialogVisible = false }
-          })
-        }
-        .width(this.isLargeScreen() ? 480 : '95%')
-        .maxHeight('85%')
-        .backgroundColor(COLORS.panelBg)
-        .borderRadius(12)
-        .shadow({ radius: 12, color: '#33000000' })
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor('#33000000')
-      .justifyContent(FlexAlign.Center)
-      .position({ x: 0, y: 0 })
-      .onClick(() => {
-        this.isJsonDialogVisible = false
-      })
-    }
-  }
-}
+        .width('10

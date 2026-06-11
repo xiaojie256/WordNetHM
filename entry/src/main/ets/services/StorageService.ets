@@ -10,8 +10,9 @@ async function getPreferences(context: common.UIAbilityContext): Promise<prefere
   if (prefStore !== null) {
     return prefStore
   }
-  prefStore = await preferences.getPreferences(context, STORAGE_FILE_NAME)
-  return prefStore
+  const store: preferences.Preferences = await preferences.getPreferences(context, STORAGE_FILE_NAME)
+  prefStore = store
+  return store
 }
 
 export class StorageService {
@@ -27,8 +28,8 @@ export class StorageService {
         return result.data
       }
       return undefined
-    } catch (err) {
-      console.error(`[StorageService] loadWorkspace failed: ${err}`)
+    } catch (err: Error) {
+      console.error('[StorageService] loadWorkspace failed: ' + err.message)
       return undefined
     }
   }
@@ -39,9 +40,9 @@ export class StorageService {
       const jsonStr: string = JSON.stringify(workspace)
       await store.put(STORAGE_WORKSPACE_KEY, jsonStr)
       await store.flush()
-    } catch (err) {
-      console.error(`[StorageService] saveWorkspace failed: ${err}`)
-      throw err
+    } catch (err: Error) {
+      console.error('[StorageService] saveWorkspace failed: ' + err.message)
+      throw new Error('保存失败: ' + err.message)
     }
   }
 
@@ -50,9 +51,4 @@ export class StorageService {
       const store: preferences.Preferences = await getPreferences(context)
       await store.delete(STORAGE_WORKSPACE_KEY)
       await store.flush()
-    } catch (err) {
-      console.error(`[StorageService] clearWorkspace failed: ${err}`)
-      throw err
-    }
-  }
-}
+    } c
