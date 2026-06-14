@@ -6,6 +6,7 @@ export struct ContextMenu {
   @Prop menuX: number = 0
   @Prop menuY: number = 0
   onConnect: () => void = () => {}
+  onEditNote: () => void = () => {}
   onRename: () => void = () => {}
   onDelete: () => void = () => {}
   onClose: () => void = () => {}
@@ -23,6 +24,18 @@ export struct ContextMenu {
           .fontColor(COLORS.textPrimary)
           .onClick(() => {
             this.onConnect()
+          })
+
+        Button('编辑注释')
+          .type(ButtonType.Normal)
+          .width(130)
+          .height(40)
+          .fontSize(14)
+          .borderRadius(0)
+          .backgroundColor(COLORS.panelBg)
+          .fontColor(COLORS.textPrimary)
+          .onClick(() => {
+            this.onEditNote()
           })
 
         Button('重命名')

@@ -13,6 +13,7 @@ interface Point2D {
 export struct ControlPanel {
   @Prop workspace: WorkspaceData = createDefaultWorkspace()
   @Prop boxSelectMode: boolean = false
+  @Prop selectedNodeId: number = -1
   @State inputWord: string = ''
   @State searchText: string = ''
   @State searchResults: WordNode[] = []
@@ -732,6 +733,87 @@ export struct ControlPanel {
     return layer.nodes[index].word
   }
 
+  private getSelectedNode(): WordNode | undefined {
+    if (this.selectedNodeId < 0) {
+      return undefined
+    }
+
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return undefined
+    }
+
+    for (const node of layer.nodes) {
+      if (node.id === this.selectedNodeId) {
+        return node
+      }
+    }
+
+    return undefined
+  }
+
+  private getSelectedNodeWord(): string {
+    const node: WordNode | undefined = this.getSelectedNode()
+    return node ? node.word : ''
+  }
+
+  private getSelectedNodeNote(): string {
+    const node: WordNode | undefined = this.getSelectedNode()
+    return node ? node.note : ''
+  }
+
+  private updateSelectedNodeNote(note: string): void {
+    if (this.selectedNodeId < 0) {
+      return
+    }
+
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+
+    const updatedNodes: WordNode[] = []
+    let found: boolean = false
+
+    for (const node of layer.nodes) {
+      if (node.id === this.selectedNodeId) {
+        updatedNodes.push({
+          id: node.id,
+          word: node.word,
+          x: node.x,
+          y: node.y,
+          note: note
+        })
+        found = true
+      } else {
+        updatedNodes.push(node)
+      }
+    }
+
+    if (!found) {
+      return
+    }
+
+    const updatedLayer: WordLayer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      nextId: layer.nextId,
+      camera: layer.camera,
+      createdAt: layer.createdAt,
+      updatedAt: Date.now()
+    }
+
+    this.emit({
+      version: this.workspace.version,
+      appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId,
+      layers: this.replaceLayer(updatedLayer),
+      updatedAt: Date.now()
+    })
+  }
+
   @Builder
   NodeNoteCard() {
     Column({ space: 8 }) {
@@ -740,9 +822,39 @@ export struct ControlPanel {
         .fontWeight(FontWeight.Bold)
         .fontColor(COLORS.textSecondary)
 
-      Text('选中节点后可在此编辑注释')
-        .fontSize(12)
-        .fontColor(COLORS.textSecondary)
+      if (this.selectedNodeId < 0) {
+        Text('请先在画布中选中一个节点，然后在这里编辑注释。')
+          .fontSize(12)
+          .fontColor(COLORS.textSecondary)
+      } else if (!this.getSelectedNode()) {
+        Text('当前选中的节点不存在，请重新选择节点。')
+          .fontSize(12)
+          .fontColor(COLORS.danger)
+      } else {
+        Text('当前节点：' + this.getSelectedNodeWord())
+          .fontSize(12)
+          .fontColor(COLORS.textSecondary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        TextArea({
+          text: this.getSelectedNodeNote(),
+          placeholder: '输入节点注释；内容过长时可在输入框内上下滑动查看'
+        })
+          .width('100%')
+          .height(180)
+          .fontSize(13)
+          .borderRadius(8)
+          .backgroundColor('#FFFFFF')
+          .padding(10)
+          .onChange((value: string) => {
+            this.updateSelectedNodeNote(value)
+          })
+
+        Text('长注释可在上方输入框内上下滑动查看。修改后会自动保存。')
+          .fontSize(11)
+          .fontColor(COLORS.textSecondary)
+      }
     }
     .width('100%')
     .padding(10)

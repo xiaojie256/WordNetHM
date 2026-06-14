@@ -12,6 +12,7 @@ import { JsonDialog } from '../components/JsonDialog'
 import { RenameNodeDialog } from '../components/RenameNodeDialog'
 import { RenameLayerDialog } from '../components/RenameLayerDialog'
 import { CreateLayerDialog } from '../components/CreateLayerDialog'
+import { EditNoteDialog } from '../components/EditNoteDialog'
 import { common } from '@kit.AbilityKit'
 
 @Entry
@@ -48,6 +49,14 @@ struct Index {
   })
   private createLayerDialog: CustomDialogController = new CustomDialogController({
     builder: CreateLayerDialog({ onConfirm: () => {} }),
+    autoCancel: true
+  })
+  private editNoteDialog: CustomDialogController = new CustomDialogController({
+    builder: EditNoteDialog({
+      nodeName: '',
+      currentNote: '',
+      onConfirm: (note: string) => {}
+    }),
     autoCancel: true
   })
 
@@ -192,7 +201,7 @@ struct Index {
 
   private openNodeMenuAt(nodeId: number, x: number, y: number): void {
     const menuWidth: number = 160
-    const menuHeight: number = 150
+    const menuHeight: number = 190
     const vpW: number = this.canvasWidth > 0 ? this.canvasWidth : 360
     const vpH: number = this.canvasHeight > 0 ? this.canvasHeight : 720
 
@@ -360,6 +369,93 @@ struct Index {
     }
     this.applyLayerUpdate(updatedLayer)
     showToast('重命名成功')
+  }
+
+  private editSelectedNodeNote(): void {
+    this.contextMenuVisible = false
+
+    const nodeId: number = this.contextMenuNodeId >= 0 ? this.contextMenuNodeId : this.selectedNodeId
+    if (nodeId < 0) {
+      showToast('请先选择一个节点')
+      return
+    }
+
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+
+    let currentNode: WordNode | undefined = undefined
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        currentNode = n
+        break
+      }
+    }
+
+    if (!currentNode) {
+      showToast('节点不存在')
+      return
+    }
+
+    this.selectedNodeId = nodeId
+
+    this.editNoteDialog = new CustomDialogController({
+      builder: EditNoteDialog({
+        nodeName: currentNode.word,
+        currentNote: currentNode.note,
+        onConfirm: (note: string) => {
+          this.updateNodeNote(nodeId, note)
+        }
+      }),
+      autoCancel: true
+    })
+
+    this.editNoteDialog.open()
+  }
+
+  private updateNodeNote(nodeId: number, note: string): void {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return
+    }
+
+    const updatedNodes: WordNode[] = []
+    let found: boolean = false
+
+    for (const n of layer.nodes) {
+      if (n.id === nodeId) {
+        updatedNodes.push({
+          id: n.id,
+          word: n.word,
+          x: n.x,
+          y: n.y,
+          note: note
+        })
+        found = true
+      } else {
+        updatedNodes.push(n)
+      }
+    }
+
+    if (!found) {
+      showToast('节点不存在')
+      return
+    }
+
+    const updatedLayer: WordLayer = {
+      id: layer.id,
+      name: layer.name,
+      nodes: updatedNodes,
+      edges: layer.edges,
+      nextId: layer.nextId,
+      camera: layer.camera,
+      createdAt: layer.createdAt,
+      updatedAt: Date.now()
+    }
+
+    this.applyLayerUpdate(updatedLayer)
+    showToast(note.length > 0 ? '注释已保存' : '注释已清空')
   }
 
   private openRenameLayerDialog(): void {
@@ -583,6 +679,7 @@ struct Index {
             ControlPanel({
               workspace: this.workspace,
               boxSelectMode: this.boxSelectMode,
+              selectedNodeId: this.selectedNodeId,
               alphabetSorted: this.alphabetSorted,
               onWorkspaceChange: (ws: WorkspaceData) => { this.onWorkspaceChange(ws) },
               onClose: () => { this.isPanelOpen = false },
@@ -686,6 +783,7 @@ struct Index {
         menuX: this.contextMenuX,
         menuY: this.contextMenuY,
         onConnect: () => { this.startConnectFromSelected() },
+        onEditNote: () => { this.editSelectedNodeNote() },
         onRename: () => { this.renameSelectedNode() },
         onDelete: () => { this.deleteSelectedNode() },
         onClose: () => { this.closeContextMenu() }
