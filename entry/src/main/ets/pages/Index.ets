@@ -204,6 +204,7 @@ struct Index {
     this.contextMenuX = safeX
     this.contextMenuY = safeY
     this.contextMenuVisible = true
+    console.info(`[Index] openNodeMenuAt visible=${this.contextMenuVisible} nodeId=${this.contextMenuNodeId} x=${this.contextMenuX.toFixed(0)} y=${this.contextMenuY.toFixed(0)}`)
   }
 
   private moveSelectedNodes(nodeIds: number[], dx: number, dy: number): void {
@@ -287,6 +288,7 @@ struct Index {
   }
 
   private onLongPressNode(nodeId: number, screenX: number, screenY: number): void {
+    console.info(`[Index] onLongPressNode nodeId=${nodeId} x=${screenX.toFixed(0)} y=${screenY.toFixed(0)}`)
     this.openNodeMenuAt(nodeId, screenX, screenY)
   }
 
@@ -647,12 +649,6 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(COLORS.pageBg)
-      .onClick(() => {
-        if (this.contextMenuVisible) {
-          this.contextMenuVisible = false
-        }
-      })
 
       if (this.isJsonDialogVisible) {
         Column() {

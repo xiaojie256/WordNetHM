@@ -41,6 +41,7 @@ export struct GraphCanvas {
   private lastX: number = 0
   private lastY: number = 0
   private longPressTriggered: boolean = false
+  private suppressNextTapAfterLongPress: boolean = false
   private pinchStartDistance: number = 0
   private pinchStartScale: number = 1
   private pinchCenterX: number = 0
@@ -397,13 +398,27 @@ export struct GraphCanvas {
                 if (!hitNode) { return }
                 const menuX: number = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
                 const menuY: number = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
-                this.longPressTriggered = true; this.isDraggingNode = false; this.draggingNodeId = -1
-                this.onSelectedNodeChange(hitNode.id)
+                this.longPressTriggered = true
+                this.suppressNextTapAfterLongPress = true
+                this.isDraggingNode = false
+                this.isPanning = false
+                this.draggingNodeId = -1
+                console.info(`[GC] LONG_PRESS node=${hitNode.id} x=${menuX.toFixed(0)} y=${menuY.toFixed(0)}`)
                 this.onLongPressNode(hitNode.id, menuX, menuY)
               }),
             TapGesture({ count: 1 })
               .onAction((event: GestureEvent) => {
-                if (this.longPressTriggered) { this.longPressTriggered = false; return }
+                if (this.suppressNextTapAfterLongPress) {
+                  console.info('[GC] TAP ignored after long press')
+                  this.suppressNextTapAfterLongPress = false
+                  this.longPressTriggered = false
+                  return
+                }
+                if (this.longPressTriggered) {
+                  console.info('[GC] TAP ignored because longPressTriggered=true')
+                  this.longPressTriggered = false
+                  return
+                }
                 const screenX: number = event.fingerList[0].localX, screenY: number = event.fingerList[0].localY
                 console.info(`[GC] TAP x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} box=${this.boxSelectMode}`)
                 if (this.boxSelectMode) { return }
@@ -449,8 +464,13 @@ export struct GraphCanvas {
               if (hitNode) {
                 const menuX: number = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
                 const menuY: number = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
-                this.longPressTriggered = true; this.isDraggingNode = false
-                this.onSelectedNodeChange(hitNode.id); this.onLongPressNode(hitNode.id, menuX, menuY)
+                this.clearLongPressTimer()
+                this.longPressTriggered = true
+                this.suppressNextTapAfterLongPress = true
+                this.isDraggingNode = false
+                this.isPanning = false
+                this.draggingNodeId = -1
+                this.onLongPressNode(hitNode.id, menuX, menuY)
               }
               return
             }
