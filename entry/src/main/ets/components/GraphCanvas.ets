@@ -11,7 +11,7 @@ interface Point2D {
 @Component
 export struct GraphCanvas {
   @Prop @Watch('onDataChange') workspace: WorkspaceData = createDefaultWorkspace()
-  @Prop selectedNodeId: number = -1
+  @Prop @Watch('onSelectionStateChange') selectedNodeId: number = -1
   @State connectingFromId: number = -1
   @State highlightNodeId: number = -1
   onWorkspaceChange: (ws: WorkspaceData) => void = (ws: WorkspaceData) => {}
@@ -19,8 +19,8 @@ export struct GraphCanvas {
   onLongPressNode: (nodeId: number, screenX: number, screenY: number) => void =
     (id: number, sx: number, sy: number) => {}
   onViewportChange: (width: number, height: number) => void = (w: number, h: number) => {}
-  boxSelectMode: boolean = false
-  selectedNodeIds: number[] = []
+  @Prop @Watch('onInteractionModeChange') boxSelectMode: boolean = false
+  @Prop @Watch('onSelectionStateChange') selectedNodeIds: number[] = []
   onMultiSelectNodes: (nodeIds: number[]) => void = (nodeIds: number[]) => {}
   onMoveSelectedNodes: (nodeIds: number[], dx: number, dy: number) => void =
     (nodeIds: number[], dx: number, dy: number) => {}
@@ -61,6 +61,19 @@ export struct GraphCanvas {
     if (this.isCanvasReady) {
       this.redraw()
     }
+  }
+
+  private onSelectionStateChange(): void {
+    this.safeRedraw()
+  }
+
+  private onInteractionModeChange(): void {
+    if (!this.boxSelectMode) {
+      this.isBoxSelecting = false
+      this.isDraggingMultiNodes = false
+    }
+    console.info(`[GC] boxSelectMode changed: ${this.boxSelectMode}`)
+    this.safeRedraw()
   }
 
   private onDataChange(): void {
@@ -270,18 +283,47 @@ export struct GraphCanvas {
     ctx.save(); ctx.strokeStyle = COLORS.primary; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]); ctx.strokeRect(left, top, width, height); ctx.restore()
   }
 
+  private handleConnectionTarget(hitNode: WordNode | undefined): boolean {
+    if (this.connectingFromId < 0) {
+      return false
+    }
+
+    if (!hitNode) {
+      this.connectingFromId = -1
+      this.safeRedraw()
+      showToast('已取消连接')
+      return true
+    }
+
+    if (hitNode.id === this.connectingFromId) {
+      this.connectingFromId = -1
+      this.safeRedraw()
+      showToast('不能连接同一个节点')
+      return true
+    }
+
+    this.completeConnection(hitNode.id)
+    return true
+  }
+
   private handlePointerDown(screenX: number, screenY: number): void {
     console.info(`[GC] handlePointerDown x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} box=${this.boxSelectMode} longPress=${this.longPressTriggered}`)
     if (this.longPressTriggered) { this.longPressTriggered = false; return }
     if (this.handleBoxSelectDown(screenX, screenY)) { return }
     this.lastX = screenX; this.lastY = screenY
     const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
+
+    if (this.handleConnectionTarget(hitNode)) { return }
+
     if (hitNode) {
-      if (this.connectingFromId >= 0 && hitNode.id !== this.connectingFromId) { this.completeConnection(hitNode.id); return }
-      this.isDraggingNode = true; this.draggingNodeId = hitNode.id; this.dragStartX = screenX; this.dragStartY = screenY
+      this.isDraggingNode = true
+      this.draggingNodeId = hitNode.id
+      this.dragStartX = screenX
+      this.dragStartY = screenY
       this.onSelectedNodeChange(hitNode.id)
     } else {
-      this.isPanning = true; this.onSelectedNodeChange(-1); this.connectingFromId = -1
+      this.isPanning = true
+      this.onSelectedNodeChange(-1)
     }
     this.safeRedraw()
   }
@@ -325,7 +367,16 @@ export struct GraphCanvas {
   }
   private handlePinchEnd(): void { this.isPinching = false }
 
-  public startConnectFromSelected(): void { if (this.selectedNodeId >= 0) { this.connectingFromId = this.selectedNodeId; this.safeRedraw() } }
+  public startConnectFromSelected(): void {
+    if (this.selectedNodeId >= 0) {
+      this.connectingFromId = this.selectedNodeId
+      console.info(`[GC] start connect from node=${this.connectingFromId}`)
+      showToast('请选择目标节点')
+      this.safeRedraw()
+    } else {
+      showToast('请先选择起始节点')
+    }
+  }
   private onStartConnectChange(): void { if (this.shouldStartConnect) { this.shouldStartConnect = false; this.startConnectFromSelected() } }
 
   private completeConnection(targetId: number): void {
@@ -368,17 +419,40 @@ export struct GraphCanvas {
   private drawNode(ctx: CanvasRenderingContext2D, node: WordNode): void {
     const isSelected: boolean = node.id === this.selectedNodeId || node.id === this.highlightNodeId
     const isMultiSelected: boolean = this.selectedNodeIds.includes(node.id)
-    ctx.beginPath(); ctx.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2)
-    ctx.fillStyle = (isSelected || isMultiSelected) ? COLORS.nodeHighlight : COLORS.nodeBg; ctx.fill()
-    ctx.strokeStyle = isSelected ? COLORS.nodeSelectedBorder : COLORS.nodeBorder; ctx.lineWidth = isSelected ? 3 : 1.5; ctx.stroke()
+    const isConnectionSource: boolean = node.id === this.connectingFromId
+    const shouldHighlight: boolean = isSelected || isMultiSelected || isConnectionSource
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2)
+    ctx.fillStyle = shouldHighlight ? COLORS.nodeHighlight : COLORS.nodeBg
+    ctx.fill()
+    ctx.strokeStyle = shouldHighlight ? COLORS.nodeSelectedBorder : COLORS.nodeBorder
+    ctx.lineWidth = shouldHighlight ? 3 : 1.5
+    ctx.stroke()
     if (isMultiSelected && !isSelected) {
       ctx.beginPath(); ctx.arc(node.x, node.y, NODE_RADIUS + 4, 0, Math.PI * 2); ctx.strokeStyle = COLORS.primary; ctx.lineWidth = 2.5
       ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
     }
-    const fontSize: number = Math.max(11, Math.min(15, 12 / this.camera.scale))
-    ctx.fillStyle = COLORS.textPrimary; ctx.font = `bold ${fontSize}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    let label: string = node.word; const maxWidth: number = NODE_RADIUS * 1.6; const metrics: TextMetrics = ctx.measureText(label)
-    if (metrics.width > maxWidth && maxWidth > 0) { while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) { label = label.slice(0, -1) }; label = label + '…' }
+    let label: string = node.word
+    let fontSize: number = Math.max(16, Math.min(22, NODE_RADIUS * 0.58))
+    const maxWidth: number = NODE_RADIUS * 1.72
+
+    ctx.fillStyle = COLORS.textPrimary
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = `bold ${fontSize}px sans-serif`
+
+    while (fontSize > 13 && ctx.measureText(label).width > maxWidth) {
+      fontSize -= 1
+      ctx.font = `bold ${fontSize}px sans-serif`
+    }
+
+    if (ctx.measureText(label).width > maxWidth && maxWidth > 0) {
+      while (label.length > 1 && ctx.measureText(label + '…').width > maxWidth) {
+        label = label.slice(0, -1)
+      }
+      label = label + '…'
+    }
+
     ctx.fillText(label, node.x, node.y)
     if (node.note && node.note.length > 0) { ctx.fillStyle = COLORS.noteDot; ctx.beginPath(); ctx.arc(node.x + 22, node.y - 22, 5, 0, Math.PI * 2); ctx.fill() }
   }
@@ -431,6 +505,9 @@ export struct GraphCanvas {
                 console.info(`[GC] TAP x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} box=${this.boxSelectMode}`)
                 if (this.boxSelectMode) { return }
                 const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
+
+                if (this.handleConnectionTarget(hitNode)) { return }
+
                 if (hitNode) { this.onSelectedNodeChange(hitNode.id) } else { this.onSelectedNodeChange(-1) }
                 this.safeRedraw()
               }),
@@ -483,7 +560,15 @@ export struct GraphCanvas {
               return
             }
             if (event.button === MouseButton.Left) {
-              if (hitNode) { this.onSelectedNodeChange(hitNode.id) }
+              if (this.handleConnectionTarget(hitNode)) { return }
+
+              if (hitNode) {
+                this.onSelectedNodeChange(hitNode.id)
+                this.safeRedraw()
+              } else {
+                this.onSelectedNodeChange(-1)
+                this.safeRedraw()
+              }
             }
           }
           if (event.action === MouseAction.Release) { if (this.boxSelectMode) { this.handlePointerUp() } }

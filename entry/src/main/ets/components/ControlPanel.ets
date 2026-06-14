@@ -18,6 +18,10 @@ export struct ControlPanel {
   @State searchResults: WordNode[] = []
   @State selectedSourceIndex: number = -1
   @State selectedTargetIndex: number = -1
+  @State sourceSearchText: string = ''
+  @State targetSearchText: string = ''
+  @State sourceSuggestions: WordNode[] = []
+  @State targetSuggestions: WordNode[] = []
   onWorkspaceChange: (ws: WorkspaceData) => void = (ws: WorkspaceData) => {}
   onClose: () => void = () => {}
   onLocateNode: (nodeId: number) => void = (id: number) => {}
@@ -532,7 +536,43 @@ export struct ControlPanel {
         .value(this.selectedSourceIndex >= 0 ? this.getNodeLabel(this.selectedSourceIndex) : '请选择')
         .width('100%')
         .height(40)
-        .onSelect((index: number) => { this.selectedSourceIndex = index })
+        .onSelect((index: number) => {
+          this.selectedSourceIndex = index
+          this.sourceSearchText = this.getNodeLabel(index)
+          this.sourceSuggestions = []
+        })
+
+      TextInput({ text: this.sourceSearchText, placeholder: '输入字母快速查找起始节点...' })
+        .fontSize(13)
+        .height(36)
+        .borderRadius(8)
+        .backgroundColor('#FFFFFF')
+        .onChange((value: string) => {
+          this.sourceSearchText = value
+          this.sourceSuggestions = this.getConnectionSuggestions(value)
+        })
+
+      if (this.sourceSuggestions.length > 0) {
+        Column({ space: 4 }) {
+          ForEach(this.sourceSuggestions, (node: WordNode) => {
+            Row() {
+              Text(node.word)
+                .fontSize(13)
+                .fontColor(COLORS.textPrimary)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .height(34)
+            .padding({ left: 10, right: 10 })
+            .borderRadius(6)
+            .backgroundColor('#EEF2FF')
+            .onClick(() => {
+              this.selectSourceNode(node)
+            })
+          })
+        }
+        .width('100%')
+      }
 
       Text('目标节点')
         .fontSize(12)
@@ -543,7 +583,43 @@ export struct ControlPanel {
         .value(this.selectedTargetIndex >= 0 ? this.getNodeLabel(this.selectedTargetIndex) : '请选择')
         .width('100%')
         .height(40)
-        .onSelect((index: number) => { this.selectedTargetIndex = index })
+        .onSelect((index: number) => {
+          this.selectedTargetIndex = index
+          this.targetSearchText = this.getNodeLabel(index)
+          this.targetSuggestions = []
+        })
+
+      TextInput({ text: this.targetSearchText, placeholder: '输入字母快速查找目标节点...' })
+        .fontSize(13)
+        .height(36)
+        .borderRadius(8)
+        .backgroundColor('#FFFFFF')
+        .onChange((value: string) => {
+          this.targetSearchText = value
+          this.targetSuggestions = this.getConnectionSuggestions(value)
+        })
+
+      if (this.targetSuggestions.length > 0) {
+        Column({ space: 4 }) {
+          ForEach(this.targetSuggestions, (node: WordNode) => {
+            Row() {
+              Text(node.word)
+                .fontSize(13)
+                .fontColor(COLORS.textPrimary)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .height(34)
+            .padding({ left: 10, right: 10 })
+            .borderRadius(6)
+            .backgroundColor('#EEF2FF')
+            .onClick(() => {
+              this.selectTargetNode(node)
+            })
+          })
+        }
+        .width('100%')
+      }
 
       Row({ space: 6 }) {
         Button('连接')
@@ -554,7 +630,9 @@ export struct ControlPanel {
           .backgroundColor(COLORS.primary)
           .fontColor('#FFFFFF')
           .layoutWeight(1)
-          .onClick(() => { this.connectNodes() })
+          .onClick(() => {
+            this.connectNodes()
+          })
 
         Button('断开')
           .type(ButtonType.Normal)
@@ -564,7 +642,9 @@ export struct ControlPanel {
           .backgroundColor('#FEE2E2')
           .fontColor(COLORS.danger)
           .layoutWeight(1)
-          .onClick(() => { this.disconnectNodes() })
+          .onClick(() => {
+            this.disconnectNodes()
+          })
       }
       .width('100%')
     }
@@ -585,6 +665,63 @@ export struct ControlPanel {
       options.push(opt)
     }
     return options
+  }
+
+  private getConnectionSuggestions(keyword: string): WordNode[] {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return []
+    }
+
+    const normalized: string = keyword.trim().toLowerCase()
+    if (normalized.length === 0) {
+      return []
+    }
+
+    const results: WordNode[] = []
+    for (const node of layer.nodes) {
+      if (node.word.toLowerCase().includes(normalized) || node.note.toLowerCase().includes(normalized)) {
+        results.push(node)
+        if (results.length >= 8) {
+          break
+        }
+      }
+    }
+
+    return results
+  }
+
+  private findNodeIndexById(nodeId: number): number {
+    const layer: WordLayer | undefined = this.getCurrentLayer()
+    if (!layer) {
+      return -1
+    }
+
+    for (let i: number = 0; i < layer.nodes.length; i++) {
+      if (layer.nodes[i].id === nodeId) {
+        return i
+      }
+    }
+
+    return -1
+  }
+
+  private selectSourceNode(node: WordNode): void {
+    const index: number = this.findNodeIndexById(node.id)
+    if (index >= 0) {
+      this.selectedSourceIndex = index
+      this.sourceSearchText = node.word
+      this.sourceSuggestions = []
+    }
+  }
+
+  private selectTargetNode(node: WordNode): void {
+    const index: number = this.findNodeIndexById(node.id)
+    if (index >= 0) {
+      this.selectedTargetIndex = index
+      this.targetSearchText = node.word
+      this.targetSuggestions = []
+    }
   }
 
   private getNodeLabel(index: number): string {

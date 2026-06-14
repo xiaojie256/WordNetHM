@@ -508,7 +508,13 @@ struct Index {
 
   private startConnectFromSelected(): void {
     this.contextMenuVisible = false
+
+    if (this.contextMenuNodeId >= 0) {
+      this.selectedNodeId = this.contextMenuNodeId
+    }
+
     this.shouldStartConnect = true
+    showToast('请选择目标节点')
   }
 
   private getCurrentLayer(): WordLayer | undefined {
