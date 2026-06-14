@@ -98,11 +98,15 @@ struct Index {
   }
 
   private toggleBoxSelectMode(): void {
-    this.boxSelectMode = !this.boxSelectMode
+    const nextMode: boolean = !this.boxSelectMode
 
-    if (!this.boxSelectMode) {
-      this.selectedNodeIds = []
-    }
+    this.boxSelectMode = nextMode
+    this.contextMenuVisible = false
+    this.contextMenuNodeId = -1
+
+    // 进入/退出框选模式时，都清理单选和多选状态，避免退出后残留蓝色选中边框。
+    this.selectedNodeIds = []
+    this.selectedNodeId = -1
 
     showToast(this.boxSelectMode ? '框选模式已开启' : '框选模式已关闭')
   }

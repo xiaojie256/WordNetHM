@@ -53,9 +53,17 @@ export struct GraphCanvas {
   @State boxStartY: number = 0
   @State boxCurrentX: number = 0
   @State boxCurrentY: number = 0
+
+  // 框选拖动过程中的"实时预览命中节点"，只用于画蓝边，不立即提交给父组件。
+  @State previewBoxNodeIds: number[] = []
+
   private isDraggingMultiNodes: boolean = false
   private multiDragLastWorldX: number = 0
   private multiDragLastWorldY: number = 0
+
+  // 限制框选预览计算频率：鼠标/手指移动距离太小时不重复全量扫描节点，避免节点多时卡顿。
+  private lastPreviewScreenX: number = -999999
+  private lastPreviewScreenY: number = -999999
 
   private safeRedraw(): void {
     if (this.isCanvasReady) {
@@ -71,6 +79,9 @@ export struct GraphCanvas {
     if (!this.boxSelectMode) {
       this.isBoxSelecting = false
       this.isDraggingMultiNodes = false
+      this.previewBoxNodeIds = []
+      this.lastPreviewScreenX = -999999
+      this.lastPreviewScreenY = -999999
     }
     console.info(`[GC] boxSelectMode changed: ${this.boxSelectMode}`)
     this.safeRedraw()
@@ -216,62 +227,180 @@ export struct GraphCanvas {
     }
   }
 
+  private isSameNumberArray(a: number[], b: number[]): boolean {
+    if (a.length !== b.length) {
+      return false
+    }
+
+    for (let i: number = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  private updatePreviewBoxNodes(screenX: number, screenY: number, force: boolean): void {
+    const dx: number = screenX - this.lastPreviewScreenX
+    const dy: number = screenY - this.lastPreviewScreenY
+
+    // 非强制刷新时，移动不足 4px 不重新扫描节点，减少大量节点场景下的计算压力。
+    if (!force && dx * dx + dy * dy < 16) {
+      return
+    }
+
+    this.lastPreviewScreenX = screenX
+    this.lastPreviewScreenY = screenY
+
+    const nextPreviewIds: number[] = this.getNodesInSelectionBox()
+    if (!this.isSameNumberArray(this.previewBoxNodeIds, nextPreviewIds)) {
+      this.previewBoxNodeIds = nextPreviewIds
+    }
+  }
+
   private handleBoxSelectDown(screenX: number, screenY: number): boolean {
-    if (!this.boxSelectMode) { return false }
+    if (!this.boxSelectMode) {
+      return false
+    }
+
     console.info(`[GC] BOX_DOWN x=${screenX.toFixed(0)} y=${screenY.toFixed(0)}`)
+
     const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
     if (hitNode) {
+      this.previewBoxNodeIds = []
+
       if (this.selectedNodeIds.includes(hitNode.id)) {
         const worldPoint: Point2D = this.toWorld(screenX, screenY)
-        this.isDraggingMultiNodes = true; this.multiDragLastWorldX = worldPoint.x; this.multiDragLastWorldY = worldPoint.y
+        this.isDraggingMultiNodes = true
+        this.multiDragLastWorldX = worldPoint.x
+        this.multiDragLastWorldY = worldPoint.y
         return true
       }
-      this.onMultiSelectNodes([hitNode.id]); return true
+
+      this.onMultiSelectNodes([hitNode.id])
+      this.safeRedraw()
+      return true
     }
-    this.isBoxSelecting = true; this.boxStartX = screenX; this.boxStartY = screenY; this.boxCurrentX = screenX; this.boxCurrentY = screenY
-    this.onMultiSelectNodes([]); return true
+
+    this.isBoxSelecting = true
+    this.boxStartX = screenX
+    this.boxStartY = screenY
+    this.boxCurrentX = screenX
+    this.boxCurrentY = screenY
+    this.previewBoxNodeIds = []
+    this.lastPreviewScreenX = -999999
+    this.lastPreviewScreenY = -999999
+
+    this.onMultiSelectNodes([])
+    this.updatePreviewBoxNodes(screenX, screenY, true)
+    this.safeRedraw()
+    return true
   }
 
   private handleBoxSelectMove(screenX: number, screenY: number): boolean {
-    if (!this.boxSelectMode) { return false }
-    if (this.isBoxSelecting) {
-      this.boxCurrentX = screenX; this.boxCurrentY = screenY
-      console.info(`[GC] BOX_MOVE x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} w=${Math.abs(this.boxCurrentX - this.boxStartX).toFixed(0)} h=${Math.abs(this.boxCurrentY - this.boxStartY).toFixed(0)}`)
-      this.safeRedraw(); return true
+    if (!this.boxSelectMode) {
+      return false
     }
-    if (this.isDraggingMultiNodes) {
-      const worldPoint: Point2D = this.toWorld(screenX, screenY)
-      const dx: number = worldPoint.x - this.multiDragLastWorldX, dy: number = worldPoint.y - this.multiDragLastWorldY
-      this.multiDragLastWorldX = worldPoint.x; this.multiDragLastWorldY = worldPoint.y
-      if (this.selectedNodeIds.length > 0) { this.onMoveSelectedNodes(this.selectedNodeIds, dx, dy) }
+
+    if (this.isBoxSelecting) {
+      this.boxCurrentX = screenX
+      this.boxCurrentY = screenY
+
+      this.updatePreviewBoxNodes(screenX, screenY, false)
+
+      console.info(`[GC] BOX_MOVE x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} w=${Math.abs(this.boxCurrentX - this.boxStartX).toFixed(0)} h=${Math.abs(this.boxCurrentY - this.boxStartY).toFixed(0)}`)
+      this.safeRedraw()
       return true
     }
+
+    if (this.isDraggingMultiNodes) {
+      const worldPoint: Point2D = this.toWorld(screenX, screenY)
+      const dx: number = worldPoint.x - this.multiDragLastWorldX
+      const dy: number = worldPoint.y - this.multiDragLastWorldY
+
+      this.multiDragLastWorldX = worldPoint.x
+      this.multiDragLastWorldY = worldPoint.y
+
+      if (this.selectedNodeIds.length > 0) {
+        this.onMoveSelectedNodes(this.selectedNodeIds, dx, dy)
+      }
+
+      return true
+    }
+
     return false
   }
 
   private handleBoxSelectUp(): boolean {
-    if (!this.boxSelectMode) { return false }
-    if (this.isDraggingMultiNodes) { this.isDraggingMultiNodes = false; return true }
-    if (!this.isBoxSelecting) { return false }
+    if (!this.boxSelectMode) {
+      return false
+    }
+
+    if (this.isDraggingMultiNodes) {
+      this.isDraggingMultiNodes = false
+      this.previewBoxNodeIds = []
+      this.safeRedraw()
+      return true
+    }
+
+    if (!this.isBoxSelecting) {
+      return false
+    }
+
+    this.updatePreviewBoxNodes(this.boxCurrentX, this.boxCurrentY, true)
     const selectedIds: number[] = this.getNodesInSelectionBox()
-    this.isBoxSelecting = false; this.safeRedraw()
+
+    this.isBoxSelecting = false
+    this.previewBoxNodeIds = []
+    this.lastPreviewScreenX = -999999
+    this.lastPreviewScreenY = -999999
+
     this.onMultiSelectNodes(selectedIds)
-    if (selectedIds.length > 0) { showToast('已选中 ' + selectedIds.length.toString() + ' 个节点') } else { showToast('未选中节点') }
+    this.safeRedraw()
+
+    if (selectedIds.length > 0) {
+      showToast('已选中 ' + selectedIds.length.toString() + ' 个节点')
+    } else {
+      showToast('未选中节点')
+    }
+
     return true
   }
 
   private getNodesInSelectionBox(): number[] {
     const layer: WordLayer | undefined = this.getCurrentLayer()
-    if (!layer) { return [] }
-    const left: number = Math.min(this.boxStartX, this.boxCurrentX), right: number = Math.max(this.boxStartX, this.boxCurrentX)
-    const top: number = Math.min(this.boxStartY, this.boxCurrentY), bottom: number = Math.max(this.boxStartY, this.boxCurrentY)
-    const topLeftWorld: Point2D = this.toWorld(left, top), bottomRightWorld: Point2D = this.toWorld(right, bottom)
-    const worldLeft: number = Math.min(topLeftWorld.x, bottomRightWorld.x), worldRight: number = Math.max(topLeftWorld.x, bottomRightWorld.x)
-    const worldTop: number = Math.min(topLeftWorld.y, bottomRightWorld.y), worldBottom: number = Math.max(topLeftWorld.y, bottomRightWorld.y)
-    const ids: number[] = []
-    for (const node of layer.nodes) {
-      if (node.x >= worldLeft && node.x <= worldRight && node.y >= worldTop && node.y <= worldBottom) { ids.push(node.id) }
+    if (!layer) {
+      return []
     }
+
+    const left: number = Math.min(this.boxStartX, this.boxCurrentX)
+    const right: number = Math.max(this.boxStartX, this.boxCurrentX)
+    const top: number = Math.min(this.boxStartY, this.boxCurrentY)
+    const bottom: number = Math.max(this.boxStartY, this.boxCurrentY)
+
+    const topLeftWorld: Point2D = this.toWorld(left, top)
+    const bottomRightWorld: Point2D = this.toWorld(right, bottom)
+
+    const worldLeft: number = Math.min(topLeftWorld.x, bottomRightWorld.x)
+    const worldRight: number = Math.max(topLeftWorld.x, bottomRightWorld.x)
+    const worldTop: number = Math.min(topLeftWorld.y, bottomRightWorld.y)
+    const worldBottom: number = Math.max(topLeftWorld.y, bottomRightWorld.y)
+
+    const ids: number[] = []
+
+    for (const node of layer.nodes) {
+      const closestX: number = Math.max(worldLeft, Math.min(node.x, worldRight))
+      const closestY: number = Math.max(worldTop, Math.min(node.y, worldBottom))
+      const dx: number = node.x - closestX
+      const dy: number = node.y - closestY
+
+      // 矩形与节点圆形相交即算覆盖到节点，而不是必须覆盖节点圆心。
+      if (dx * dx + dy * dy <= NODE_RADIUS * NODE_RADIUS) {
+        ids.push(node.id)
+      }
+    }
+
     return ids
   }
 
@@ -419,8 +548,10 @@ export struct GraphCanvas {
   private drawNode(ctx: CanvasRenderingContext2D, node: WordNode): void {
     const isSelected: boolean = node.id === this.selectedNodeId || node.id === this.highlightNodeId
     const isMultiSelected: boolean = this.selectedNodeIds.includes(node.id)
+    const isPreviewSelected: boolean = this.isBoxSelecting && this.previewBoxNodeIds.includes(node.id)
     const isConnectionSource: boolean = node.id === this.connectingFromId
-    const shouldHighlight: boolean = isSelected || isMultiSelected || isConnectionSource
+
+    const shouldHighlight: boolean = isSelected || isMultiSelected || isPreviewSelected || isConnectionSource
     ctx.beginPath()
     ctx.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2)
     ctx.fillStyle = shouldHighlight ? COLORS.nodeHighlight : COLORS.nodeBg
@@ -428,12 +559,17 @@ export struct GraphCanvas {
     ctx.strokeStyle = shouldHighlight ? COLORS.nodeSelectedBorder : COLORS.nodeBorder
     ctx.lineWidth = shouldHighlight ? 3 : 1.5
     ctx.stroke()
-    if (isMultiSelected && !isSelected) {
-      ctx.beginPath(); ctx.arc(node.x, node.y, NODE_RADIUS + 4, 0, Math.PI * 2); ctx.strokeStyle = COLORS.primary; ctx.lineWidth = 2.5
-      ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
+    if ((isMultiSelected || isPreviewSelected) && !isSelected) {
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, NODE_RADIUS + 4, 0, Math.PI * 2)
+      ctx.strokeStyle = COLORS.primary
+      ctx.lineWidth = 2.5
+      ctx.setLineDash([4, 3])
+      ctx.stroke()
+      ctx.setLineDash([])
     }
     let label: string = node.word
-    let fontSize: number = Math.max(16, Math.min(22, NODE_RADIUS * 0.58))
+    let fontSize: number = Math.max(18, Math.min(26, NODE_RADIUS * 0.85))
     const maxWidth: number = NODE_RADIUS * 1.72
 
     ctx.fillStyle = COLORS.textPrimary
