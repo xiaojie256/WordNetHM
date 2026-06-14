@@ -143,3 +143,20 @@ export struct JsonDialog {
           Button('取消')
             .type(ButtonType.Normal)
             .fontSize(13)
+            .height(40)
+            .borderRadius(8)
+            .backgroundColor(COLORS.panelBg)
+            .fontColor(COLORS.textPrimary)
+            .layoutWeight(1)
+            .onClick(() => {
+              this.onClose()
+            })
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding(16)
+  }
+}

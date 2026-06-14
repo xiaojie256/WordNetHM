@@ -43,6 +43,7 @@ export struct ZoomControls {
       .backgroundColor(this.hasSelectedNode ? COLORS.primary : '#E5E7EB')
       .borderRadius(10)
       .onClick(() => {
+        console.info(`[ZC] action clicked, hasSelected=${this.hasSelectedNode}`)
         this.onAction()
       })
 

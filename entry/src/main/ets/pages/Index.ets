@@ -108,8 +108,9 @@ struct Index {
   }
 
   private toggleAlphabetSort(): void {
+    console.info(`[Index] toggleAlphabetSort called, alphabetSorted=${this.alphabetSorted}`)
     const layer: WordLayer | undefined = this.getCurrentLayer()
-    if (!layer) {
+    if (!layer || layer.nodes.length === 0) {
       return
     }
 
@@ -120,7 +121,21 @@ struct Index {
       for (const n of layer.nodes) {
         this.nodePositionsBeforeSort.set(n.id, [n.x, n.y])
       }
-      newNodes = [...layer.nodes].sort((a: WordNode, b: WordNode) => a.word.localeCompare(b.word))
+      const sorted: WordNode[] = [...layer.nodes].sort((a: WordNode, b: WordNode) => a.word.localeCompare(b.word))
+      const cols: number = Math.max(1, Math.ceil(Math.sqrt(sorted.length)))
+      const gapX: number = 160
+      const gapY: number = 120
+      const startX: number = 0
+      const startY: number = 0
+      newNodes = []
+      for (let i: number = 0; i < sorted.length; i++) {
+        const col: number = i % cols
+        const row: number = Math.floor(i / cols)
+        newNodes.push({
+          id: sorted[i].id, word: sorted[i].word,
+          x: startX + col * gapX, y: startY + row * gapY, note: sorted[i].note
+        })
+      }
       this.alphabetSorted = true
       showToast('已按字母排序')
     } else {
@@ -154,9 +169,11 @@ struct Index {
       version: this.workspace.version, appName: this.workspace.appName,
       currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
     })
+    console.info(`[Index] toggleAlphabetSort done, newNodes count=${newNodes.length}`)
   }
 
   private openSelectedNodeMenu(): void {
+    console.info(`[Index] openSelectedNodeMenu called, selectedNodeId=${this.selectedNodeId}`)
     if (this.selectedNodeId < 0) {
       showToast('请先选择一个节点')
       return
@@ -519,6 +536,7 @@ struct Index {
             shouldStartConnect: $shouldStartConnect,
             onWorkspaceChange: (ws: WorkspaceData) => { this.onWorkspaceChange(ws) },
             onSelectedNodeChange: (id: number) => {
+              console.info(`[Index] onSelectedNodeChange: ${id}`)
               this.selectedNodeId = id
               this.contextMenuVisible = false
             },
@@ -779,4 +797,28 @@ struct Index {
     const nextScale: number = Math.max(0.2, Math.min(5, cam.scale * factor))
     const updatedCamera: CameraState = {
       scale: nextScale,
-      x: cx - worldX * nextSca
+      x: cx - worldX * nextScale,
+      y: cy - worldY * nextScale
+    }
+    const updatedLayer: WordLayer = {
+      id: layer.id, name: layer.name, nodes: layer.nodes, edges: layer.edges,
+      nextId: layer.nextId, camera: updatedCamera, createdAt: layer.createdAt, updatedAt: Date.now()
+    }
+    this.applyLayerUpdate(updatedLayer)
+  }
+
+  private applyLayerUpdate(updatedLayer: WordLayer): void {
+    const updatedLayers: WordLayer[] = []
+    for (const l of this.workspace.layers) {
+      if (l.id === updatedLayer.id) {
+        updatedLayers.push(updatedLayer)
+      } else {
+        updatedLayers.push(l)
+      }
+    }
+    this.onWorkspaceChange({
+      version: this.workspace.version, appName: this.workspace.appName,
+      currentLayerId: this.workspace.currentLayerId, layers: updatedLayers, updatedAt: Date.now()
+    })
+  }
+}

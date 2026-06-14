@@ -1,6 +1,6 @@
 import { CameraState, WordLayer, WordNode, WordEdge, WorkspaceData } from '../models/GraphModels'
 import { createDefaultWorkspace } from '../services/WorkspaceFactory'
-import { COLORS, NODE_RADIUS, MIN_SCALE, MAX_SCALE, ZOOM_FACTOR, LONG_PRESS_MS, LONG_PRESS_MOVE_THRESHOLD } from '../constants/AppConstants'
+import { COLORS, NODE_RADIUS, MIN_SCALE, MAX_SCALE, ZOOM_FACTOR, LONG_PRESS_MS } from '../constants/AppConstants'
 import { showToast } from '../utils/ToastUtil'
 
 interface Point2D {
@@ -40,13 +40,7 @@ export struct GraphCanvas {
   private dragStartY: number = 0
   private lastX: number = 0
   private lastY: number = 0
-  private longPressTimer: number = -1
   private longPressTriggered: boolean = false
-  private longPressNodeId: number = -1
-  private longPressStartX: number = 0
-  private longPressStartY: number = 0
-  private longPressMenuX: number = 0
-  private longPressMenuY: number = 0
   private pinchStartDistance: number = 0
   private pinchStartScale: number = 1
   private pinchCenterX: number = 0
@@ -196,19 +190,8 @@ export struct GraphCanvas {
     return undefined
   }
 
-  private clearLongPressTimer(): void { if (this.longPressTimer >= 0) { clearTimeout(this.longPressTimer); this.longPressTimer = -1 } }
-
-  private startLongPressIfNode(screenX: number, screenY: number): void {
-    this.clearLongPressTimer(); this.longPressNodeId = -1
-    const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
-    if (!hitNode) { return }
-    this.longPressNodeId = hitNode.id; this.longPressStartX = screenX; this.longPressStartY = screenY
-    this.longPressMenuX = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
-    this.longPressMenuY = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
-    this.longPressTimer = setTimeout(() => {
-      if (this.longPressNodeId >= 0) { this.longPressTriggered = true; this.isDraggingNode = false; this.onLongPressNode(this.longPressNodeId, this.longPressMenuX, this.longPressMenuY) }
-      this.longPressTimer = -1
-    }, LONG_PRESS_MS) as number
+  private resetDragState(): void {
+    this.isDraggingNode = false; this.isPanning = false; this.draggingNodeId = -1
   }
 
   private handleBoxSelectDown(screenX: number, screenY: number): boolean {
@@ -297,12 +280,6 @@ export struct GraphCanvas {
   private handlePointerMove(screenX: number, screenY: number): void {
     if (this.handleBoxSelectMove(screenX, screenY)) { return }
     if (this.isDraggingNode && !this.longPressTriggered) {
-      if (this.longPressNodeId >= 0) {
-        const dxFromStart: number = screenX - this.longPressStartX, dyFromStart: number = screenY - this.longPressStartY
-        const distFromStart: number = Math.sqrt(dxFromStart * dxFromStart + dyFromStart * dyFromStart)
-        if (distFromStart > LONG_PRESS_MOVE_THRESHOLD) { this.clearLongPressTimer(); this.longPressNodeId = -1 }
-        else { this.lastX = screenX; this.lastY = screenY; return }
-      }
       const dx: number = screenX - this.lastX, dy: number = screenY - this.lastY
       const layer: WordLayer | undefined = this.getCurrentLayer()
       if (layer) { for (const n of layer.nodes) { if (n.id === this.draggingNodeId) { this.emitNodePositionChange(n.id, n.x + dx / this.camera.scale, n.y + dy / this.camera.scale); break } } }
@@ -316,9 +293,8 @@ export struct GraphCanvas {
   private handlePointerUp(): void {
     if (this.handleBoxSelectUp()) { return }
     const wasLongPress: boolean = this.longPressTriggered
-    this.clearLongPressTimer(); this.longPressNodeId = -1
-    if (wasLongPress) { this.longPressTriggered = false; this.isDraggingNode = false; this.isPanning = false; this.draggingNodeId = -1; return }
-    this.longPressTriggered = false; this.isDraggingNode = false; this.isPanning = false; this.draggingNodeId = -1
+    if (wasLongPress) { this.longPressTriggered = false; this.resetDragState(); return }
+    this.longPressTriggered = false; this.resetDragState()
   }
 
   private getTouchDistance(t0: TouchObject, t1: TouchObject): number { return Math.sqrt((t0.x - t1.x) ** 2 + (t0.y - t1.y) ** 2) }
@@ -328,7 +304,7 @@ export struct GraphCanvas {
     this.emitCameraChange(); this.safeRedraw()
   }
   private handlePinchStart(t0: TouchObject, t1: TouchObject): void {
-    this.isPinching = true; this.isDraggingNode = false; this.isPanning = false; this.clearLongPressTimer(); this.longPressNodeId = -1
+    this.isPinching = true; this.isDraggingNode = false; this.isPanning = false
     this.pinchStartDistance = this.getTouchDistance(t0, t1); this.pinchStartScale = this.camera.scale
     this.pinchCenterX = (t0.x + t1.x) / 2; this.pinchCenterY = (t0.y + t1.y) / 2
   }
@@ -413,8 +389,21 @@ export struct GraphCanvas {
         })
         .gesture(
           GestureGroup(GestureMode.Parallel,
+            LongPressGesture({ duration: LONG_PRESS_MS })
+              .onAction((event: GestureEvent) => {
+                const screenX: number = event.fingerList[0].localX, screenY: number = event.fingerList[0].localY
+                console.info(`[GC] LONG_PRESS x=${screenX.toFixed(0)} y=${screenY.toFixed(0)}`)
+                const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
+                if (!hitNode) { return }
+                const menuX: number = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
+                const menuY: number = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
+                this.longPressTriggered = true; this.isDraggingNode = false; this.draggingNodeId = -1
+                this.onSelectedNodeChange(hitNode.id)
+                this.onLongPressNode(hitNode.id, menuX, menuY)
+              }),
             TapGesture({ count: 1 })
               .onAction((event: GestureEvent) => {
+                if (this.longPressTriggered) { this.longPressTriggered = false; return }
                 const screenX: number = event.fingerList[0].localX, screenY: number = event.fingerList[0].localY
                 console.info(`[GC] TAP x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} box=${this.boxSelectMode}`)
                 if (this.boxSelectMode) { return }
@@ -427,7 +416,6 @@ export struct GraphCanvas {
                 const screenX: number = event.fingerList[0].localX, screenY: number = event.fingerList[0].localY
                 console.info(`[GC] PAN start x=${screenX.toFixed(0)} y=${screenY.toFixed(0)} box=${this.boxSelectMode}`)
                 this.handlePointerDown(screenX, screenY)
-                if (this.isDraggingNode && !this.boxSelectMode) { this.startLongPressIfNode(screenX, screenY) }
               })
               .onActionUpdate((event: GestureEvent) => {
                 const screenX: number = event.fingerList[0].localX, screenY: number = event.fingerList[0].localY
@@ -458,23 +446,19 @@ export struct GraphCanvas {
             if (this.boxSelectMode) { this.handlePointerDown(screenX, screenY); return }
             const hitNode: WordNode | undefined = this.hitTestNode(screenX, screenY)
             if (event.button === MouseButton.Right) {
-              if (hitNode) { this.clearLongPressTimer(); this.longPressTriggered = true; this.isDraggingNode = false; this.onSelectedNodeChange(hitNode.id); this.onLongPressNode(hitNode.id, screenX, screenY) }
+              if (hitNode) {
+                const menuX: number = Math.max(10, Math.min(screenX, this.canvasWidth - 140))
+                const menuY: number = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
+                this.longPressTriggered = true; this.isDraggingNode = false
+                this.onSelectedNodeChange(hitNode.id); this.onLongPressNode(hitNode.id, menuX, menuY)
+              }
               return
             }
             if (event.button === MouseButton.Left) {
-              this.longPressTriggered = false
-              if (!hitNode) { this.clearLongPressTimer(); this.longPressNodeId = -1; return }
-              this.onSelectedNodeChange(hitNode.id); this.longPressNodeId = hitNode.id
-              this.longPressStartX = screenX; this.longPressStartY = screenY
-              this.longPressMenuX = Math.max(10, Math.min(screenX, this.canvasWidth - 140)); this.longPressMenuY = Math.max(10, Math.min(screenY, this.canvasHeight - 130))
-              this.clearLongPressTimer()
-              this.longPressTimer = setTimeout(() => {
-                if (this.longPressNodeId >= 0) { this.longPressTriggered = true; this.isDraggingNode = false; this.onLongPressNode(this.longPressNodeId, this.longPressMenuX, this.longPressMenuY) }
-                this.longPressTimer = -1
-              }, LONG_PRESS_MS) as number
+              if (hitNode) { this.onSelectedNodeChange(hitNode.id) }
             }
           }
-          if (event.action === MouseAction.Release) { if (this.boxSelectMode) { this.handlePointerUp() }; this.clearLongPressTimer(); this.longPressNodeId = -1 }
+          if (event.action === MouseAction.Release) { if (this.boxSelectMode) { this.handlePointerUp() } }
         })
     }
     .width('100%')
