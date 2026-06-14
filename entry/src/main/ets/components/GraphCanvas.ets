@@ -42,6 +42,7 @@ export struct GraphCanvas {
   private lastY: number = 0
   private longPressTriggered: boolean = false
   private suppressNextTapAfterLongPress: boolean = false
+  private longPressTimer: number = -1
   private pinchStartDistance: number = 0
   private pinchStartScale: number = 1
   private pinchCenterX: number = 0
@@ -193,6 +194,13 @@ export struct GraphCanvas {
 
   private resetDragState(): void {
     this.isDraggingNode = false; this.isPanning = false; this.draggingNodeId = -1
+  }
+
+  private clearLongPressTimer(): void {
+    if (this.longPressTimer !== -1) {
+      clearTimeout(this.longPressTimer)
+      this.longPressTimer = -1
+    }
   }
 
   private handleBoxSelectDown(screenX: number, screenY: number): boolean {
