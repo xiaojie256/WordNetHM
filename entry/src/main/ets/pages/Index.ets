@@ -633,16 +633,6 @@ struct Index {
             onToggleBoxSelect: () => { this.toggleBoxSelectMode() }
           })
 
-          ContextMenu({
-            visible: this.contextMenuVisible,
-            menuX: this.contextMenuX,
-            menuY: this.contextMenuY,
-            onConnect: () => { this.startConnectFromSelected() },
-            onRename: () => { this.renameSelectedNode() },
-            onDelete: () => { this.deleteSelectedNode() },
-            onClose: () => { this.closeContextMenu() }
-          })
-          .zIndex(600)
         }
         .layoutWeight(1)
         .width('100%')
@@ -680,6 +670,18 @@ struct Index {
           this.jsonText = ''
         })
       }
+
+      ContextMenu({
+        visible: this.contextMenuVisible,
+        menuX: this.contextMenuX,
+        menuY: this.contextMenuY,
+        onConnect: () => { this.startConnectFromSelected() },
+        onRename: () => { this.renameSelectedNode() },
+        onDelete: () => { this.deleteSelectedNode() },
+        onClose: () => { this.closeContextMenu() }
+      })
+      .position({ x: 0, y: 0 })
+      .zIndex(900)
     }
     .width('100%')
     .height('100%')
